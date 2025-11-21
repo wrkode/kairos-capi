@@ -1,0 +1,27 @@
+# This kustomization.yaml is used by clusterctl to install the provider components
+# It includes CRDs, RBAC, webhooks, and the manager deployment
+
+resources:
+  - ../crd
+  - ../rbac
+  - ../webhook
+  - ../manager
+
+namespace: kairos-capi-system
+
+# Set the image name and tag
+images:
+  - name: controller
+    newName: ghcr.io/wrkode/kairos-capi
+    newTag: latest
+
+# Common labels for all resources
+commonLabels:
+  cluster.x-k8s.io/provider: kairos
+  app.kubernetes.io/name: kairos-capi
+  app.kubernetes.io/component: controller-manager
+
+# Common annotations
+commonAnnotations:
+  cluster.x-k8s.io/provider: kairos
+

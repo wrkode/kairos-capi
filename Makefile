@@ -1,5 +1,5 @@
 # Image URL to use all building/pushing image targets
-IMG ?= controller:latest
+IMG ?= ghcr.io/wrkode/kairos-capi:latest
 # Produce CRDs that work back to Kubernetes 1.11 (no version conversion)
 CRD_OPTIONS ?= "crd:generateEmbeddedObjectMeta=true"
 
@@ -60,6 +60,10 @@ test: generate fmt vet ## Run tests.
 test-unit: ## Run unit tests only.
 	go test ./... -v -short
 
+.PHONY: test-envtest
+test-envtest: ## Run envtest-based integration tests.
+	go test ./test/envtest/... -v -timeout 60s
+
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint.
 	$(GOLANGCI_LINT) run
@@ -83,12 +87,18 @@ run: manifests generate fmt vet ## Run a controller from your host.
 	go run ./main.go
 
 .PHONY: docker-build
-docker-build: test ## Build docker image with the manager.
+docker-build: generate fmt vet ## Build docker image with the manager.
 	docker build -t ${IMG} .
+	@echo "Built image: ${IMG}"
+
+.PHONY: docker-buildx
+docker-buildx: generate fmt vet ## Build docker image with buildx for multi-platform.
+	docker buildx build --platform linux/amd64,linux/arm64 -t ${IMG} --push .
 
 .PHONY: docker-push
-docker-push: ## Push docker image with the manager.
+docker-push: docker-build ## Push docker image with the manager.
 	docker push ${IMG}
+	@echo "Pushed image: ${IMG}"
 
 ##@ Deployment
 

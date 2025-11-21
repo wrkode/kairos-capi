@@ -83,7 +83,7 @@ func (r *KairosControlPlane) validate() error {
 		allErrs = append(allErrs, field.Invalid(
 			field.NewPath("spec", "replicas"),
 			*r.Spec.Replicas,
-			"replicas must be >= 1",
+			"spec.replicas must be greater than or equal to 1",
 		))
 	}
 

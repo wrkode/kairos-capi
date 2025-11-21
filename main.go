@@ -24,6 +24,7 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -33,6 +34,7 @@ import (
 
 	bootstrapv1beta2 "github.com/wrkode/kairos-capi/api/bootstrap/v1beta2"
 	controlplanev1beta2 "github.com/wrkode/kairos-capi/api/controlplane/v1beta2"
+	"github.com/wrkode/kairos-capi/internal/config"
 	"github.com/wrkode/kairos-capi/internal/controllers/bootstrap"
 	"github.com/wrkode/kairos-capi/internal/controllers/controlplane"
 	//+kubebuilder:scaffold:imports
@@ -66,9 +68,18 @@ func main() {
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
 
+	// Load configuration
+	cfg := config.LoadConfig()
+
+	// Set log level if specified
+	if cfg.LogLevel == "debug" {
+		opts.Development = true
+	}
+
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
-	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
+	// Configure manager options
+	mgrOptions := ctrl.Options{
 		Scheme: scheme,
 		Metrics: metricsserver.Options{
 			BindAddress: metricsAddr,
@@ -79,7 +90,21 @@ func main() {
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
 		LeaderElectionID:       "kairos-capi-leader-election",
-	})
+	}
+
+	// Set cache namespace if WATCH_NAMESPACE is configured
+	if !cfg.ShouldWatchAllNamespaces() {
+		mgrOptions.Cache = cache.Options{
+			DefaultNamespaces: map[string]cache.Config{
+				cfg.GetWatchNamespace(): {},
+			},
+		}
+		setupLog.Info("Watching single namespace", "namespace", cfg.GetWatchNamespace())
+	} else {
+		setupLog.Info("Watching all namespaces")
+	}
+
+	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), mgrOptions)
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
 		os.Exit(1)

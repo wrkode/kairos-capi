@@ -98,7 +98,7 @@ func (r *KairosConfig) validate() error {
 		allErrs = append(allErrs, field.Invalid(
 			field.NewPath("spec", "role"),
 			r.Spec.Role,
-			"role must be either 'control-plane' or 'worker'",
+			"spec.role must be one of [control-plane, worker]",
 		))
 	}
 
@@ -107,7 +107,7 @@ func (r *KairosConfig) validate() error {
 		allErrs = append(allErrs, field.Invalid(
 			field.NewPath("spec", "distribution"),
 			r.Spec.Distribution,
-			"distribution must be 'k0s' (k3s support is planned)",
+			"spec.distribution must be 'k0s' (k3s support is planned for future releases)",
 		))
 	}
 
@@ -118,7 +118,7 @@ func (r *KairosConfig) validate() error {
 		if !hasToken && !hasTokenRef {
 			allErrs = append(allErrs, field.Required(
 				field.NewPath("spec", "workerToken"),
-				"worker token is required for worker nodes: either workerToken or workerTokenSecretRef must be set",
+				"worker KairosConfig requires either spec.workerToken or spec.workerTokenSecretRef to be set",
 			))
 		}
 	}
