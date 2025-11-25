@@ -41,6 +41,9 @@ metadata:
   namespace: default
 spec:
   # Required: vCenter server FQDN or IP address
+  # IMPORTANT: Use only the hostname or IP address, NOT a URL with protocol/path
+  # Correct: "vcenter.example.com" or "172.16.56.10"
+  # Wrong: "https://vcenter.example.com" or "https://172.16.56.10/sdk"
   server: "vcenter.example.com"
   
   # Optional: SSL thumbprint for vCenter certificate validation
@@ -127,14 +130,16 @@ spec:
 # 
 # Step 1: Create a Secret with your vSphere credentials
 # 
-# IMPORTANT: Replace the placeholder values with your actual vSphere credentials
-# and apply this Secret BEFORE applying the cluster manifest above.
+# IMPORTANT: 
+# 1. Replace the placeholder values with your actual vSphere credentials
+# 2. The Secret MUST be created in the capv-system namespace (where CAPV controller runs)
+# 3. Apply this Secret BEFORE applying the cluster manifest above
 #
 apiVersion: v1
 kind: Secret
 metadata:
   name: vsphere-credentials-secret
-  namespace: default  # Must match the namespace where you'll create the cluster
+  namespace: capv-system  # IMPORTANT: MUST be in capv-system namespace (not the cluster namespace)
 type: Opaque
 stringData:
   username: "administrator@vsphere.local"  # TODO: Replace with your vSphere username
@@ -145,19 +150,25 @@ stringData:
 # This allows the VSphereCluster to use the credentials securely.
 # The allowedNamespaces field controls which namespaces can use this identity.
 #
+# IMPORTANT NOTES:
+# - VSphereClusterIdentity is cluster-scoped (no namespace)
+# - The Secret referenced by secretName must be in capv-system namespace
+# - If using Option B (label selector), label your cluster namespace first:
+#   kubectl label namespace default vsphere-identity=allowed
+#
 apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
 kind: VSphereClusterIdentity
 metadata:
   name: vsphere-credentials
   # Note: VSphereClusterIdentity is cluster-scoped (no namespace)
 spec:
-  secretName: vsphere-credentials-secret  # References the Secret created above
+  secretName: vsphere-credentials-secret  # References the Secret in capv-system namespace
   allowedNamespaces:
     # Use a selector to control which namespaces can use this identity
     # Option A: Allow all namespaces (use with caution)
     selector:
       matchLabels: {}
-    # Option B: Allow specific namespaces by label
+    # Option B: Allow specific namespaces by label (RECOMMENDED)
     # First, label your namespaces:
     #   kubectl label namespace default vsphere-identity=allowed
     #   kubectl label namespace production vsphere-identity=allowed

@@ -34,37 +34,69 @@ clusterctl init --infrastructure vsphere
 
 #### 2. Configure vSphere Credentials
 
-Create a `VSphereClusterIdentity` or Secret with vSphere credentials:
+Create a `VSphereClusterIdentity` and Secret with vSphere credentials:
+
+**IMPORTANT**: The Secret **MUST** be created in the `capv-system` namespace (where the CAPV controller runs), not in your cluster namespace.
 
 ```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: vsphere-credentials-secret
+  namespace: capv-system  # IMPORTANT: MUST be in capv-system namespace
+type: Opaque
+stringData:
+  username: administrator@vsphere.local
+  password: <your-password>
+---
 apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
 kind: VSphereClusterIdentity
 metadata:
   name: vsphere-credentials
   # Note: VSphereClusterIdentity is cluster-scoped (no namespace)
 spec:
-  secretName: vsphere-credentials-secret
+  secretName: vsphere-credentials-secret  # References the Secret in capv-system namespace
   allowedNamespaces:
     # Use selector to control which namespaces can use this identity
     # Option A: Allow all namespaces (use with caution)
     selector:
       matchLabels: {}
-    # Option B: Allow specific namespaces by label
+    # Option B: Allow specific namespaces by label (RECOMMENDED)
     # First label namespaces: kubectl label namespace default vsphere-identity=allowed
     # Then use:
     # selector:
     #   matchLabels:
     #     vsphere-identity: allowed
----
+```
+
+**Apply the credentials**:
+```bash
+# Apply the Secret and VSphereClusterIdentity
+kubectl apply -f - <<EOF
 apiVersion: v1
 kind: Secret
 metadata:
   name: vsphere-credentials-secret
-  namespace: default
+  namespace: capv-system
 type: Opaque
 stringData:
   username: administrator@vsphere.local
   password: <your-password>
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+kind: VSphereClusterIdentity
+metadata:
+  name: vsphere-credentials
+spec:
+  secretName: vsphere-credentials-secret
+  allowedNamespaces:
+    selector:
+      matchLabels:
+        vsphere-identity: allowed
+EOF
+
+# Label your namespace to allow using this identity
+kubectl label namespace default vsphere-identity=allowed
 ```
 
 #### 3. Install Kairos CAPI Provider
@@ -130,6 +162,9 @@ metadata:
   name: kairos-cluster
   namespace: default
 spec:
+  # IMPORTANT: Use only hostname or IP address, NOT a URL
+  # Correct: "vcenter.example.com" or "172.16.56.10"
+  # Wrong: "https://vcenter.example.com" or "https://172.16.56.10/sdk"
   server: "vcenter.example.com"  # TODO: Set your vCenter server
   # thumbprint: "..."             # Optional: SSL thumbprint
   identityRef:
@@ -253,7 +288,7 @@ kubectl --kubeconfig=kairos-kubeconfig.yaml get pods -n kube-system
 
 | Field | Location | Description |
 |-------|----------|-------------|
-| `server` | VSphereCluster.spec | vCenter server FQDN/IP |
+| `server` | VSphereCluster.spec | vCenter server FQDN/IP (hostname or IP only, NOT a URL) |
 | `datacenter` | VSphereCluster.spec, VSphereMachineTemplate.spec | Datacenter name |
 | `datastore` | VSphereMachineTemplate.spec | Datastore name |
 | `networkName` | VSphereMachineTemplate.spec.network.devices | VM Network name |
@@ -280,11 +315,19 @@ kubectl --kubeconfig=kairos-kubeconfig.yaml get pods -n kube-system
 # Check VSphereCluster status
 kubectl describe vspherecluster kairos-cluster
 
-# Verify credentials
-kubectl get secret vsphere-credentials-secret -o yaml
+# Verify VSphereClusterIdentity is ready
+kubectl get vsphereclusteridentity vsphere-credentials -o yaml
+
+# Verify credentials (must be in capv-system namespace)
+kubectl get secret vsphere-credentials-secret -n capv-system -o yaml
 
 # Check CAPV controller logs
 kubectl logs -n capv-system deployment/capv-controller-manager
+
+# Common issues:
+# 1. Secret not in capv-system namespace → Move it: kubectl get secret vsphere-credentials-secret -n default -o yaml | kubectl apply -n capv-system -f -
+# 2. Server URL includes protocol/path → Use only hostname/IP: "172.16.56.10" not "https://172.16.56.10/sdk"
+# 3. Namespace not labeled → Label it: kubectl label namespace default vsphere-identity=allowed
 ```
 
 ### VM Creation Fails

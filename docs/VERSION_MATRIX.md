@@ -59,34 +59,34 @@ This document tracks version compatibility between Kairos CAPI Provider and its 
 ### CAPD (Docker)
 
 - **Version**: v1.8.0+ (matches CAPI version)
-- **Status**: ✅ Tested and supported
+- **Status**: Tested and supported
 
 ### CAPV (vSphere)
 
 - **Version**: v1.8.0+ (matches CAPI version)
-- **Status**: ✅ Supported (requires configuration)
+- **Status**: Supported (requires configuration)
 
 ### Other Providers
 
-- **Status**: ⚠️ Not yet tested
+- **Status**: Not yet tested
 - **Compatibility**: Should work with any CAPI-compatible infrastructure provider
 
 ## Feature Support by Version
 
 ### v0.1.0
 
-- ✅ Bootstrap provider (KairosConfig)
-- ✅ Control plane provider (KairosControlPlane)
-- ✅ Single-node control plane
-- ✅ Worker nodes via MachineDeployment
-- ✅ Native k0s integration
-- ✅ Webhook validation
-- ✅ CAPD support
-- ✅ CAPV support
-- ❌ Multi-node HA control plane
-- ❌ k3s distribution
-- ❌ ClusterClass support
-- ❌ Upgrade support
+- Bootstrap provider (KairosConfig)
+- Control plane provider (KairosControlPlane)
+- Single-node control plane
+- Worker nodes via MachineDeployment
+- Native k0s integration
+- Webhook validation
+- CAPD support
+- CAPV support
+- Multi-node HA control plane: Not supported
+- k3s distribution: Not supported
+- ClusterClass support: Not supported
+- Upgrade support: Not supported
 
 ## Breaking Changes
 
@@ -107,11 +107,11 @@ When upgrading, ensure:
 
 | Test Scenario | CAPI v1.8.0 | CAPI v1.11.0 | Status |
 |---------------|--------------|--------------|--------|
-| Single-node CP (CAPD) | ✅ | ✅ | Tested |
-| Worker nodes (CAPD) | ✅ | ✅ | Tested |
-| Single-node CP (CAPV) | ⚠️ | ⚠️ | Manual testing needed |
-| Webhook validation | ✅ | ✅ | Tested |
-| Bootstrap data generation | ✅ | ✅ | Tested |
+| Single-node CP (CAPD) | Yes | Yes | Tested |
+| Worker nodes (CAPD) | Yes | Yes | Tested |
+| Single-node CP (CAPV) | Not tested | Not tested | Manual testing needed |
+| Webhook validation | Yes | Yes | Tested |
+| Bootstrap data generation | Yes | Yes | Tested |
 
 ## Known Limitations
 
