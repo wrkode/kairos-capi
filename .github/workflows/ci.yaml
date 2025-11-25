@@ -99,6 +99,10 @@ jobs:
       run: |
         go install sigs.k8s.io/controller-tools/cmd/controller-gen@v0.17.0
 
+    - name: Install PyYAML (for label insertion)
+      run: |
+        python3 -m pip install --user PyYAML
+
     - name: Generate manifests
       run: make manifests
 
