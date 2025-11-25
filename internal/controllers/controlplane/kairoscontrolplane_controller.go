@@ -86,8 +86,37 @@ func (r *KairosControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.R
 	// Find the owning Cluster
 	cluster, err := util.GetClusterFromMetadata(ctx, r.Client, kcp.ObjectMeta)
 	if err != nil {
-		log.Error(err, "Failed to get cluster from metadata")
-		return ctrl.Result{}, err
+		// If the error is due to missing cluster-name label or Cluster not found,
+		// try to find the Cluster by searching for Clusters that reference this KairosControlPlane
+		errMsg := err.Error()
+		if errMsg == "no \"cluster.x-k8s.io/cluster-name\" label present" || 
+		   apierrors.IsNotFound(err) ||
+		   (errMsg != "" && (errMsg == "failed to get Cluster/kairos-cluster: Cluster.cluster.x-k8s.io \"kairos-cluster\" not found" || 
+		   errMsg == "Cluster.cluster.x-k8s.io \"kairos-cluster\" not found")) {
+			log.Info("cluster-name label missing or Cluster not found via metadata, searching for Cluster that references this control plane", "error", errMsg)
+			cluster, err = r.findClusterForControlPlane(ctx, kcp)
+			if err != nil {
+				log.Error(err, "Failed to find cluster for control plane")
+				return ctrl.Result{}, err
+			}
+			if cluster != nil {
+				// Set the label on the KairosControlPlane
+				if kcp.Labels == nil {
+					kcp.Labels = make(map[string]string)
+				}
+				kcp.Labels[clusterv1.ClusterNameLabel] = cluster.Name
+				if err := r.Update(ctx, kcp); err != nil {
+					log.Error(err, "Failed to update KairosControlPlane with cluster-name label")
+					return ctrl.Result{}, err
+				}
+				log.Info("Set cluster-name label on KairosControlPlane", "cluster", cluster.Name)
+				// Return to trigger a new reconcile with the label set
+				return ctrl.Result{Requeue: true}, nil
+			}
+		} else {
+			log.Error(err, "Failed to get cluster from metadata")
+			return ctrl.Result{}, err
+		}
 	}
 	if cluster == nil {
 		log.Info("Cluster is not available yet")
@@ -138,6 +167,35 @@ func (r *KairosControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.R
 	}
 
 	return ctrl.Result{}, helper.Patch(ctx, kcp)
+}
+
+// findClusterForControlPlane searches for a Cluster that references this KairosControlPlane
+func (r *KairosControlPlaneReconciler) findClusterForControlPlane(ctx context.Context, kcp *controlplanev1beta2.KairosControlPlane) (*clusterv1.Cluster, error) {
+	// List all Clusters in the same namespace
+	clusters := &clusterv1.ClusterList{}
+	if err := r.List(ctx, clusters, client.InNamespace(kcp.Namespace)); err != nil {
+		return nil, fmt.Errorf("failed to list clusters: %w", err)
+	}
+
+	// Find the Cluster that references this KairosControlPlane
+	for i := range clusters.Items {
+		cluster := &clusters.Items[i]
+		if cluster.Spec.ControlPlaneRef != nil &&
+			cluster.Spec.ControlPlaneRef.Kind == "KairosControlPlane" &&
+			cluster.Spec.ControlPlaneRef.Name == kcp.Name {
+			// Check namespace - it might be empty (defaults to cluster namespace)
+			refNamespace := cluster.Spec.ControlPlaneRef.Namespace
+			if refNamespace == "" || refNamespace == kcp.Namespace {
+				// Check API version/group matches
+				refAPIVersion := cluster.Spec.ControlPlaneRef.APIVersion
+				if refAPIVersion == "" || refAPIVersion == controlplanev1beta2.GroupVersion.String() {
+					return cluster, nil
+				}
+			}
+		}
+	}
+
+	return nil, nil
 }
 
 func (r *KairosControlPlaneReconciler) reconcileMachines(ctx context.Context, log logr.Logger, kcp *controlplanev1beta2.KairosControlPlane, cluster *clusterv1.Cluster) error {
