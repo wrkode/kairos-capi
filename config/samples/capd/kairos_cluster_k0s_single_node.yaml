@@ -1,17 +1,17 @@
-apiVersion: cluster.x-k8s.io/v1beta1
+apiVersion: cluster.x-k8s.io/v1beta2
 kind: Cluster
-# Note: CAPI core types (Cluster, Machine) are still v1beta1 as of CAPI v1.8.0
-# v1beta2 for these types is not yet available in the CAPI Go module
 metadata:
   name: kairos-cluster
   namespace: default
 spec:
   infrastructureRef:
-    apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+    # Note: In v1beta2, use apiGroup instead of apiVersion
+    apiGroup: infrastructure.cluster.x-k8s.io
     kind: DockerCluster
     name: kairos-cluster
   controlPlaneRef:
-    apiVersion: controlplane.cluster.x-k8s.io/v1beta2
+    # Note: In v1beta2, use apiGroup instead of apiVersion
+    apiGroup: controlplane.cluster.x-k8s.io
     kind: KairosControlPlane
     name: kairos-control-plane
 ---
@@ -37,7 +37,7 @@ spec:
       namespace: default
   kairosConfigTemplate:
     name: kairos-config-template-control-plane
-    namespace: default
+    # Note: namespace defaults to the same namespace as KairosControlPlane
 ---
 apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
 kind: DockerMachineTemplate

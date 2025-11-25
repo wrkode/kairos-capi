@@ -1,15 +1,36 @@
-apiVersion: cluster.x-k8s.io/v1beta1
+# ============================================================================
+# CAPV Sample: Single-Node k0s Cluster on Kairos OS
+# ============================================================================
+#
+# SETUP INSTRUCTIONS:
+# 
+# 1. FIRST, apply the VSphereClusterIdentity and Secret (at the bottom of this file)
+#    - Edit the Secret with your actual vSphere credentials
+#    - kubectl apply -f config/samples/capv/kairos_cluster_k0s_single_node.yaml
+#
+# 2. THEN, customize the VSphereCluster and VSphereMachineTemplate below:
+#    - Set server, datacenter, datastore, network, template names
+#    - Edit the values marked with TODO comments
+#
+# 3. FINALLY, apply the entire manifest again (or apply just the cluster parts)
+#    - kubectl apply -f config/samples/capv/kairos_cluster_k0s_single_node.yaml
+#
+# ============================================================================
+
+apiVersion: cluster.x-k8s.io/v1beta2
 kind: Cluster
 metadata:
   name: kairos-cluster
   namespace: default
 spec:
   infrastructureRef:
-    apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+    # Note: In v1beta2, use apiGroup instead of apiVersion
+    apiGroup: infrastructure.cluster.x-k8s.io
     kind: VSphereCluster
     name: kairos-cluster
   controlPlaneRef:
-    apiVersion: controlplane.cluster.x-k8s.io/v1beta2
+    # Note: In v1beta2, use apiGroup instead of apiVersion
+    apiGroup: controlplane.cluster.x-k8s.io
     kind: KairosControlPlane
     name: kairos-control-plane
 ---
@@ -19,11 +40,26 @@ metadata:
   name: kairos-cluster
   namespace: default
 spec:
-  # TODO: Configure vSphere connection details
-  # server: "vcenter.example.com"
-  # datacenter: "Datacenter"
-  # thumbprint: "thumbprint"
-  # or use VSphereClusterIdentity for credentials
+  # Required: vCenter server FQDN or IP address
+  server: "vcenter.example.com"
+  
+  # Optional: SSL thumbprint for vCenter certificate validation
+  # thumbprint: "AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD"
+  
+  # Option 1: Use VSphereClusterIdentity (RECOMMENDED for production)
+  # First, create a VSphereClusterIdentity and Secret (see below), then reference it:
+  identityRef:
+    kind: VSphereClusterIdentity
+    name: vsphere-credentials
+  # Note: identityRef does NOT have an apiVersion field
+  
+  # Option 2: Inline credentials (NOT RECOMMENDED - use only for testing)
+  # If you don't use identityRef, you can specify credentials directly:
+  # credentials:
+  #   username: "administrator@vsphere.local"
+  #   password: "your-password"
+  
+  # Note: datacenter is NOT specified here - it's specified in VSphereMachineTemplate instead
 ---
 apiVersion: controlplane.cluster.x-k8s.io/v1beta2
 kind: KairosControlPlane
@@ -41,7 +77,7 @@ spec:
       namespace: default
   kairosConfigTemplate:
     name: kairos-config-template-control-plane
-    namespace: default
+    # Note: namespace is NOT specified here - it defaults to the same namespace as KairosControlPlane
 ---
 apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
 kind: VSphereMachineTemplate
@@ -84,4 +120,49 @@ spec:
       # githubUser: "your-github-username"
       # Optional: Add SSH public key instead
       # sshPublicKey: "ssh-rsa AAAAB3NzaC1yc2E..."
+---
+# ============================================================================
+# VSphere Credentials Setup (REQUIRED - apply this BEFORE the cluster manifest)
+# ============================================================================
+# 
+# Step 1: Create a Secret with your vSphere credentials
+# 
+# IMPORTANT: Replace the placeholder values with your actual vSphere credentials
+# and apply this Secret BEFORE applying the cluster manifest above.
+#
+apiVersion: v1
+kind: Secret
+metadata:
+  name: vsphere-credentials-secret
+  namespace: default  # Must match the namespace where you'll create the cluster
+type: Opaque
+stringData:
+  username: "administrator@vsphere.local"  # TODO: Replace with your vSphere username
+  password: "your-vsphere-password"        # TODO: Replace with your vSphere password
+---
+# Step 2: Create a VSphereClusterIdentity that references the Secret
+#
+# This allows the VSphereCluster to use the credentials securely.
+# The allowedNamespaces field controls which namespaces can use this identity.
+#
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+kind: VSphereClusterIdentity
+metadata:
+  name: vsphere-credentials
+  # Note: VSphereClusterIdentity is cluster-scoped (no namespace)
+spec:
+  secretName: vsphere-credentials-secret  # References the Secret created above
+  allowedNamespaces:
+    # Use a selector to control which namespaces can use this identity
+    # Option A: Allow all namespaces (use with caution)
+    selector:
+      matchLabels: {}
+    # Option B: Allow specific namespaces by label
+    # First, label your namespaces:
+    #   kubectl label namespace default vsphere-identity=allowed
+    #   kubectl label namespace production vsphere-identity=allowed
+    # Then use:
+    # selector:
+    #   matchLabels:
+    #     vsphere-identity: allowed
 

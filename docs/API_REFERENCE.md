@@ -159,9 +159,10 @@ spec:
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `name` | `string` | Yes | Name of the `KairosConfigTemplate` |
-| `namespace` | `string` | No | Namespace of the template (defaults to same namespace as `KairosControlPlane`) |
 | `apiVersion` | `string` | No | API version (defaults to `bootstrap.cluster.x-k8s.io/v1beta2`) |
 | `kind` | `string` | No | Kind (defaults to `KairosConfigTemplate`) |
+
+**Note:** The `namespace` field is not part of this reference. The namespace defaults to the same namespace as the `KairosControlPlane` resource.
 
 #### RolloutStrategy
 

@@ -17,7 +17,7 @@ spec:
         cluster.x-k8s.io/control-plane: ""
   kairosConfigTemplate:
     name: kairos-config-template-control-plane
-    namespace: default
+    # Note: namespace defaults to the same namespace as KairosControlPlane
 
 ---
 apiVersion: bootstrap.cluster.x-k8s.io/v1beta2

@@ -41,11 +41,20 @@ apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
 kind: VSphereClusterIdentity
 metadata:
   name: vsphere-credentials
+  # Note: VSphereClusterIdentity is cluster-scoped (no namespace)
 spec:
   secretName: vsphere-credentials-secret
   allowedNamespaces:
-    list:
-      - default
+    # Use selector to control which namespaces can use this identity
+    # Option A: Allow all namespaces (use with caution)
+    selector:
+      matchLabels: {}
+    # Option B: Allow specific namespaces by label
+    # First label namespaces: kubectl label namespace default vsphere-identity=allowed
+    # Then use:
+    # selector:
+    #   matchLabels:
+    #     vsphere-identity: allowed
 ---
 apiVersion: v1
 kind: Secret
@@ -91,6 +100,27 @@ Before applying the manifest, ensure you have:
 
 Edit `config/samples/capv/kairos_cluster_k0s_single_node.yaml`:
 
+#### Update Cluster
+
+```yaml
+apiVersion: cluster.x-k8s.io/v1beta2
+kind: Cluster
+metadata:
+  name: kairos-cluster
+  namespace: default
+spec:
+  infrastructureRef:
+    # Note: In v1beta2, use apiGroup instead of apiVersion
+    apiGroup: infrastructure.cluster.x-k8s.io
+    kind: VSphereCluster
+    name: kairos-cluster
+  controlPlaneRef:
+    # Note: In v1beta2, use apiGroup instead of apiVersion
+    apiGroup: controlplane.cluster.x-k8s.io
+    kind: KairosControlPlane
+    name: kairos-control-plane
+```
+
 #### Update VSphereCluster
 
 ```yaml
@@ -101,11 +131,12 @@ metadata:
   namespace: default
 spec:
   server: "vcenter.example.com"  # TODO: Set your vCenter server
-  datacenter: "Datacenter"        # TODO: Set your datacenter
   # thumbprint: "..."             # Optional: SSL thumbprint
-  # identityRef:
-  #   kind: VSphereClusterIdentity
-  #   name: vsphere-credentials
+  identityRef:
+    kind: VSphereClusterIdentity
+    name: vsphere-credentials
+    # Note: identityRef does NOT have an apiVersion field
+  # Note: datacenter is NOT specified here - it's specified in VSphereMachineTemplate instead
 ```
 
 #### Update VSphereMachineTemplate
@@ -131,6 +162,28 @@ spec:
       diskGiB: 50                        # TODO: Adjust disk size
       template: "kairos-template"        # TODO: Set your Kairos template name
       cloneMode: "fullClone"             # or "linkedClone"
+```
+
+#### Update KairosControlPlane
+
+```yaml
+apiVersion: controlplane.cluster.x-k8s.io/v1beta2
+kind: KairosControlPlane
+metadata:
+  name: kairos-control-plane
+  namespace: default
+spec:
+  replicas: 1
+  version: "v1.30.0+k0s.0"
+  machineTemplate:
+    infrastructureRef:
+      apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+      kind: VSphereMachineTemplate
+      name: kairos-control-plane-template
+      namespace: default
+  kairosConfigTemplate:
+    name: kairos-config-template-control-plane
+    # Note: namespace defaults to the same namespace as KairosControlPlane
 ```
 
 #### Update KairosConfigTemplate (Optional)
