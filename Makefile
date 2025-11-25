@@ -43,6 +43,15 @@ manifests: controller-gen ## Generate ClusterRole and CustomResourceDefinition o
 	@if [ -f config/webhook/manifests.yaml ]; then \
 		sed -i 's/namespace: system/namespace: kairos-capi-system/g' config/webhook/manifests.yaml; \
 	fi
+	@# Add contract version labels to bootstrap CRDs (required for Cluster API contract compliance)
+	@if [ -f config/crd/bases/bootstrap.cluster.x-k8s.io_kairosconfigs.yaml ]; then \
+		yq eval '.metadata.labels."cluster.x-k8s.io/provider" = "kairos" | .metadata.labels."cluster.x-k8s.io/v1beta2" = "v1beta2"' -i config/crd/bases/bootstrap.cluster.x-k8s.io_kairosconfigs.yaml 2>/dev/null || \
+		sed -i '/^metadata:/a\  labels:\n    cluster.x-k8s.io/provider: kairos\n    cluster.x-k8s.io/v1beta2: v1beta2' config/crd/bases/bootstrap.cluster.x-k8s.io_kairosconfigs.yaml; \
+	fi
+	@if [ -f config/crd/bases/bootstrap.cluster.x-k8s.io_kairosconfigtemplates.yaml ]; then \
+		yq eval '.metadata.labels."cluster.x-k8s.io/provider" = "kairos" | .metadata.labels."cluster.x-k8s.io/v1beta2" = "v1beta2"' -i config/crd/bases/bootstrap.cluster.x-k8s.io_kairosconfigtemplates.yaml 2>/dev/null || \
+		sed -i '/^metadata:/a\  labels:\n    cluster.x-k8s.io/provider: kairos\n    cluster.x-k8s.io/v1beta2: v1beta2' config/crd/bases/bootstrap.cluster.x-k8s.io_kairosconfigtemplates.yaml; \
+	fi
 
 .PHONY: generate
 generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
