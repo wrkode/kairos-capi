@@ -89,10 +89,10 @@ func (r *KairosControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.R
 		// If the error is due to missing cluster-name label or Cluster not found,
 		// try to find the Cluster by searching for Clusters that reference this KairosControlPlane
 		errMsg := err.Error()
-		if errMsg == "no \"cluster.x-k8s.io/cluster-name\" label present" || 
-		   apierrors.IsNotFound(err) ||
-		   (errMsg != "" && (errMsg == "failed to get Cluster/kairos-cluster: Cluster.cluster.x-k8s.io \"kairos-cluster\" not found" || 
-		   errMsg == "Cluster.cluster.x-k8s.io \"kairos-cluster\" not found")) {
+		if errMsg == "no \"cluster.x-k8s.io/cluster-name\" label present" ||
+			apierrors.IsNotFound(err) ||
+			(errMsg != "" && (errMsg == "failed to get Cluster/kairos-cluster: Cluster.cluster.x-k8s.io \"kairos-cluster\" not found" ||
+				errMsg == "Cluster.cluster.x-k8s.io \"kairos-cluster\" not found")) {
 			log.Info("cluster-name label missing or Cluster not found via metadata, searching for Cluster that references this control plane", "error", errMsg)
 			cluster, err = r.findClusterForControlPlane(ctx, kcp)
 			if err != nil {
@@ -187,8 +187,19 @@ func (r *KairosControlPlaneReconciler) findClusterForControlPlane(ctx context.Co
 			refNamespace := cluster.Spec.ControlPlaneRef.Namespace
 			if refNamespace == "" || refNamespace == kcp.Namespace {
 				// Check API version/group matches
+				// In v1beta2, ControlPlaneRef uses apiGroup in YAML, but Go type uses APIVersion
+				// When apiGroup is set, APIVersion may be empty or contain the full version string
 				refAPIVersion := cluster.Spec.ControlPlaneRef.APIVersion
-				if refAPIVersion == "" || refAPIVersion == controlplanev1beta2.GroupVersion.String() {
+				expectedGroup := controlplanev1beta2.GroupVersion.Group
+				expectedVersion := controlplanev1beta2.GroupVersion.String()
+
+				// Match if:
+				// 1. APIVersion matches expected version (v1beta1 style or v1beta2 with full version)
+				// 2. APIVersion is empty (v1beta2 using apiGroup - we trust the kind match)
+				// 3. APIVersion contains the expected group
+				if refAPIVersion == "" ||
+					refAPIVersion == expectedVersion ||
+					(len(refAPIVersion) > 0 && len(expectedGroup) > 0 && refAPIVersion[:len(expectedGroup)] == expectedGroup) {
 					return cluster, nil
 				}
 			}
@@ -525,7 +536,20 @@ func (r *KairosControlPlaneReconciler) clusterToKairosControlPlane(ctx context.C
 		return nil
 	}
 
-	if cluster.Spec.ControlPlaneRef.Kind != "KairosControlPlane" || cluster.Spec.ControlPlaneRef.APIVersion != controlplanev1beta2.GroupVersion.String() {
+	if cluster.Spec.ControlPlaneRef.Kind != "KairosControlPlane" {
+		return nil
+	}
+
+	// Check API version/group matches
+	// In v1beta2, ControlPlaneRef uses apiGroup in YAML, but Go type uses APIVersion
+	refAPIVersion := cluster.Spec.ControlPlaneRef.APIVersion
+	expectedGroup := controlplanev1beta2.GroupVersion.Group
+	expectedVersion := controlplanev1beta2.GroupVersion.String()
+
+	// Match if APIVersion is empty (v1beta2 using apiGroup), matches expected version, or contains expected group
+	if refAPIVersion != "" &&
+		refAPIVersion != expectedVersion &&
+		!(len(refAPIVersion) > 0 && len(expectedGroup) > 0 && refAPIVersion[:len(expectedGroup)] == expectedGroup) {
 		return nil
 	}
 
