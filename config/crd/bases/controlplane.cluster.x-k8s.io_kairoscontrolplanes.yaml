@@ -45,26 +45,21 @@ spec:
     name: v1beta2
     schema:
       openAPIV3Schema:
-        description: KairosControlPlane is the Schema for the kairoscontrolplanes
-          API
+        description: KairosControlPlane is the Schema for the kairoscontrolplanes API
         properties:
           apiVersion:
-            description: 'APIVersion defines the versioned schema of this representation
-              of an object.
+            description: 'APIVersion defines the versioned schema of this representation of an object.
 
-              Servers should convert recognized schemas to the latest internal value,
-              and
+              Servers should convert recognized schemas to the latest internal value, and
 
               may reject unrecognized values.
 
               More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources'
             type: string
           kind:
-            description: 'Kind is a string value representing the REST resource this
-              object represents.
+            description: 'Kind is a string value representing the REST resource this object represents.
 
-              Servers may infer this from the endpoint the client submits requests
-              to.
+              Servers may infer this from the endpoint the client submits requests to.
 
               Cannot be updated.
 
@@ -78,8 +73,7 @@ spec:
             description: KairosControlPlaneSpec defines the desired state of KairosControlPlane
             properties:
               kairosConfigTemplate:
-                description: 'KairosConfigTemplate is a reference to a KairosConfigTemplate
-                  resource
+                description: 'KairosConfigTemplate is a reference to a KairosConfigTemplate resource
 
                   Contract: ControlPlane MUST reference a BootstrapConfigTemplate'
                 properties:
@@ -96,14 +90,12 @@ spec:
                 - name
                 type: object
               machineTemplate:
-                description: 'MachineTemplate defines the template for creating control
-                  plane machines
+                description: 'MachineTemplate defines the template for creating control plane machines
 
                   Contract: ControlPlane MUST expose machineTemplate'
                 properties:
                   infrastructureRef:
-                    description: 'InfrastructureRef is a reference to a resource that
-                      provides infrastructure
+                    description: 'InfrastructureRef is a reference to a resource that provides infrastructure
 
                       Contract: ControlPlane MUST reference an infrastructure template'
                     properties:
@@ -111,23 +103,17 @@ spec:
                         description: API version of the referent.
                         type: string
                       fieldPath:
-                        description: 'If referring to a piece of an object instead
-                          of an entire object, this string
+                        description: 'If referring to a piece of an object instead of an entire object, this string
 
-                          should contain a valid JSON/Go field access statement, such
-                          as desiredState.manifest.containers[2].
+                          should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
 
-                          For example, if the object reference is to a container within
-                          a pod, this would take on a value like:
+                          For example, if the object reference is to a container within a pod, this would take on a value like:
 
-                          "spec.containers{name}" (where "name" refers to the name
-                          of the container that triggered
+                          "spec.containers{name}" (where "name" refers to the name of the container that triggered
 
-                          the event) or if no container name is specified "spec.containers[2]"
-                          (container with
+                          the event) or if no container name is specified "spec.containers[2]" (container with
 
-                          index 2 in this pod). This syntax is chosen only to have
-                          some well-defined way of
+                          index 2 in this pod). This syntax is chosen only to have some well-defined way of
 
                           referencing a part of an object.'
                         type: string
@@ -147,8 +133,7 @@ spec:
                           More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/'
                         type: string
                       resourceVersion:
-                        description: 'Specific resourceVersion to which this reference
-                          is made, if any.
+                        description: 'Specific resourceVersion to which this reference is made, if any.
 
                           More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#concurrency-control-and-consistency'
                         type: string
@@ -165,11 +150,9 @@ spec:
                       annotations:
                         additionalProperties:
                           type: string
-                        description: 'Annotations is an unstructured key value map
-                          stored with a resource that may be
+                        description: 'Annotations is an unstructured key value map stored with a resource that may be
 
-                          set by external tools to store and retrieve arbitrary metadata.
-                          They are not
+                          set by external tools to store and retrieve arbitrary metadata. They are not
 
                           queryable and should be preserved when modifying objects.
 
@@ -178,11 +161,9 @@ spec:
                       labels:
                         additionalProperties:
                           type: string
-                        description: 'Map of string keys and values that can be used
-                          to organize and categorize
+                        description: 'Map of string keys and values that can be used to organize and categorize
 
-                          (scope and select) objects. May match selectors of replication
-                          controllers
+                          (scope and select) objects. May match selectors of replication controllers
 
                           and services.
 
@@ -190,8 +171,7 @@ spec:
                         type: object
                     type: object
                   nodeDrainTimeout:
-                    description: 'NodeDrainTimeout is the total amount of time that
-                      the controller will spend
+                    description: 'NodeDrainTimeout is the total amount of time that the controller will spend
 
                       on draining a controlplane node'
                     type: string
@@ -204,24 +184,20 @@ spec:
 
                   Contract: ControlPlane MUST expose replicas
 
-                  When replicas == 1, the control plane operates in single-node mode
-                  and k0s will be
+                  When replicas == 1, the control plane operates in single-node mode and k0s will be
 
-                  configured with --single flag. For HA setups, set replicas > 1 (full
-                  HA support is planned).'
+                  configured with --single flag. For HA setups, set replicas > 1 (full HA support is planned).'
                 format: int32
                 minimum: 1
                 type: integer
               rolloutStrategy:
-                description: RolloutStrategy defines the strategy for rolling out
-                  updates
+                description: RolloutStrategy defines the strategy for rolling out updates
                 properties:
                   rollingUpdate:
                     description: RollingUpdate defines the rolling update configuration
                     properties:
                       maxSurge:
-                        description: 'MaxSurge is the maximum number of machines that
-                          can be created above the
+                        description: 'MaxSurge is the maximum number of machines that can be created above the
 
                           desired number of machines'
                         format: int32
@@ -247,8 +223,7 @@ spec:
           status:
             description: 'KairosControlPlaneStatus defines the observed state of KairosControlPlane
 
-              Contract: ControlPlane v1beta2 MUST expose initialized, readyReplicas,
-              updatedReplicas, unavailableReplicas'
+              Contract: ControlPlane v1beta2 MUST expose initialized, readyReplicas, updatedReplicas, unavailableReplicas'
             properties:
               conditions:
                 description: 'Conditions defines current service state of the KairosControlPlane
@@ -257,37 +232,30 @@ spec:
 
                   Standard CAPI conditions: Ready, Available, Initialized'
                 items:
-                  description: Condition defines an observation of a Cluster API resource
-                    operational state.
+                  description: Condition defines an observation of a Cluster API resource operational state.
                   properties:
                     lastTransitionTime:
-                      description: 'Last time the condition transitioned from one
-                        status to another.
+                      description: 'Last time the condition transitioned from one status to another.
 
-                        This should be when the underlying condition changed. If that
-                        is not known, then using the time when
+                        This should be when the underlying condition changed. If that is not known, then using the time when
 
                         the API field changed is acceptable.'
                       format: date-time
                       type: string
                     message:
-                      description: 'A human readable message indicating details about
-                        the transition.
+                      description: 'A human readable message indicating details about the transition.
 
                         This field may be empty.'
                       type: string
                     reason:
-                      description: 'The reason for the condition''s last transition
-                        in CamelCase.
+                      description: 'The reason for the condition''s last transition in CamelCase.
 
-                        The specific API may choose whether or not this field is considered
-                        a guaranteed API.
+                        The specific API may choose whether or not this field is considered a guaranteed API.
 
                         This field may not be empty.'
                       type: string
                     severity:
-                      description: 'Severity provides an explicit classification of
-                        Reason code, so the users or machines can immediately
+                      description: 'Severity provides an explicit classification of Reason code, so the users or machines can immediately
 
                         understand the current situation and act accordingly.
 
@@ -299,11 +267,9 @@ spec:
                     type:
                       description: 'Type of condition in CamelCase or in foo.example.com/CamelCase.
 
-                        Many .condition.type values are consistent across resources
-                        like Available, but because arbitrary conditions
+                        Many .condition.type values are consistent across resources like Available, but because arbitrary conditions
 
-                        can be useful (see .node.status.conditions), the ability to
-                        deconflict is important.'
+                        can be useful (see .node.status.conditions), the ability to deconflict is important.'
                       type: string
                   required:
                   - lastTransitionTime
@@ -312,48 +278,40 @@ spec:
                   type: object
                 type: array
               failureMessage:
-                description: 'FailureMessage indicates the message for control plane
-                  failure
+                description: 'FailureMessage indicates the message for control plane failure
 
                   This field is set only when the control plane fails permanently.'
                 type: string
               failureReason:
-                description: 'FailureReason indicates the reason for control plane
-                  failure
+                description: 'FailureReason indicates the reason for control plane failure
 
                   This field is set only when the control plane fails permanently.'
                 type: string
               initialized:
-                description: 'Initialized indicates whether the control plane has
-                  been initialized
+                description: 'Initialized indicates whether the control plane has been initialized
 
                   Contract: ControlPlane MUST expose initialized
 
-                  This field MUST be set to true when the first control plane machine
-                  is ready
+                  This field MUST be set to true when the first control plane machine is ready
 
                   and the control plane is functional.'
                 type: boolean
               observedGeneration:
-                description: ObservedGeneration is the most recent generation observed
-                  by the controller
+                description: ObservedGeneration is the most recent generation observed by the controller
                 format: int64
                 type: integer
               readyReplicas:
-                description: 'ReadyReplicas is the number of control plane machines
-                  that are ready
+                description: 'ReadyReplicas is the number of control plane machines that are ready
 
                   Contract: ControlPlane MUST expose readyReplicas
 
-                  A machine is considered ready when it has a NodeRef and the Node
-                  is ready.'
+                  A machine is considered ready when it has a NodeRef and the Node is ready.'
                 format: int32
                 type: integer
               replicas:
                 description: 'Replicas is the total number of control plane machines
 
-                  This includes machines in all states (pending, running, failed,
-                  etc.)'
+                  This includes machines in all states (pending, running, failed, etc.)'
                 format: int32
                 type: integer
               selector:
@@ -362,8 +320,7 @@ spec:
                   This is used to identify machines belonging to this control plane.'
                 type: string
               unavailableReplicas:
-                description: 'UnavailableReplicas is the number of control plane machines
-                  that are unavailable
+                description: 'UnavailableReplicas is the number of control plane machines that are unavailable
 
                   Contract: ControlPlane MUST expose unavailableReplicas
 
@@ -371,13 +328,11 @@ spec:
                 format: int32
                 type: integer
               updatedReplicas:
-                description: 'UpdatedReplicas is the number of control plane machines
-                  that have been updated
+                description: 'UpdatedReplicas is the number of control plane machines that have been updated
 
                   Contract: ControlPlane MUST expose updatedReplicas
 
-                  A machine is considered updated when its spec matches the desired
-                  state.'
+                  A machine is considered updated when its spec matches the desired state.'
                 format: int32
                 type: integer
             type: object

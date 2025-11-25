@@ -54,11 +54,13 @@ manifests: controller-gen ## Generate ClusterRole and CustomResourceDefinition o
 	fi
 	@# Add contract version labels to controlplane CRDs (required for Cluster API contract compliance)
 	@# Note: Labels must be added AFTER annotations to match controller-gen output order
+	@# Add contract version labels to controlplane CRDs (required for Cluster API contract compliance)
+	@# Note: Labels must be added AFTER annotations to match controller-gen output order
 	@if [ -f config/crd/bases/controlplane.cluster.x-k8s.io_kairoscontrolplanes.yaml ]; then \
 		if command -v yq >/dev/null 2>&1; then \
 			yq eval '.metadata.labels."cluster.x-k8s.io/provider" = "kairos" | .metadata.labels."cluster.x-k8s.io/v1beta2" = "v1beta2"' -i config/crd/bases/controlplane.cluster.x-k8s.io_kairoscontrolplanes.yaml; \
-		elif python3 -c "import yaml" 2>/dev/null; then \
-			python3 -c "import yaml; crd = yaml.safe_load(open('config/crd/bases/controlplane.cluster.x-k8s.io_kairoscontrolplanes.yaml')); crd.setdefault('metadata', {}).setdefault('labels', {}).update({'cluster.x-k8s.io/provider': 'kairos', 'cluster.x-k8s.io/v1beta2': 'v1beta2'}); yaml.dump(crd, open('config/crd/bases/controlplane.cluster.x-k8s.io_kairoscontrolplanes.yaml', 'w'), default_flow_style=False, sort_keys=False, allow_unicode=True)"; \
+		elif python3 -c "import yaml" 2>/dev/null && [ -f hack/add_labels.py ]; then \
+			python3 hack/add_labels.py config/crd/bases/controlplane.cluster.x-k8s.io_kairoscontrolplanes.yaml; \
 		else \
 			sed -i '/^  name: kairoscontrolplanes.controlplane.cluster.x-k8s.io/i\  labels:\n    cluster.x-k8s.io/provider: kairos\n    cluster.x-k8s.io/v1beta2: v1beta2' config/crd/bases/controlplane.cluster.x-k8s.io_kairoscontrolplanes.yaml; \
 		fi; \
@@ -66,8 +68,8 @@ manifests: controller-gen ## Generate ClusterRole and CustomResourceDefinition o
 	@if [ -f config/crd/bases/controlplane.cluster.x-k8s.io_kairoscontrolplanetemplates.yaml ]; then \
 		if command -v yq >/dev/null 2>&1; then \
 			yq eval '.metadata.labels."cluster.x-k8s.io/provider" = "kairos" | .metadata.labels."cluster.x-k8s.io/v1beta2" = "v1beta2"' -i config/crd/bases/controlplane.cluster.x-k8s.io_kairoscontrolplanetemplates.yaml; \
-		elif python3 -c "import yaml" 2>/dev/null; then \
-			python3 -c "import yaml; crd = yaml.safe_load(open('config/crd/bases/controlplane.cluster.x-k8s.io_kairoscontrolplanetemplates.yaml')); crd.setdefault('metadata', {}).setdefault('labels', {}).update({'cluster.x-k8s.io/provider': 'kairos', 'cluster.x-k8s.io/v1beta2': 'v1beta2'}); yaml.dump(crd, open('config/crd/bases/controlplane.cluster.x-k8s.io_kairoscontrolplanetemplates.yaml', 'w'), default_flow_style=False, sort_keys=False, allow_unicode=True)"; \
+		elif python3 -c "import yaml" 2>/dev/null && [ -f hack/add_labels.py ]; then \
+			python3 hack/add_labels.py config/crd/bases/controlplane.cluster.x-k8s.io_kairoscontrolplanetemplates.yaml; \
 		else \
 			sed -i '/^  name: kairoscontrolplanetemplates.controlplane.cluster.x-k8s.io/i\  labels:\n    cluster.x-k8s.io/provider: kairos\n    cluster.x-k8s.io/v1beta2: v1beta2' config/crd/bases/controlplane.cluster.x-k8s.io_kairoscontrolplanetemplates.yaml; \
 		fi; \
