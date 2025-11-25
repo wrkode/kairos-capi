@@ -19,7 +19,6 @@ package bootstrap
 import (
 	"context"
 	"crypto/rand"
-	"encoding/base64"
 	"fmt"
 	"strings"
 
@@ -382,13 +381,19 @@ func splitLines(s string) []string {
 	return strings.Split(s, "\n")
 }
 
-// randomString generates a random string of the given length
+// randomString generates a random lowercase alphanumeric string of the given length
+// This ensures the string is RFC 1123 compliant for Kubernetes resource names
 func randomString(length int) (string, error) {
+	const charset = "abcdefghijklmnopqrstuvwxyz0123456789"
 	b := make([]byte, length)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
+	for i := range b {
+		randomByte := make([]byte, 1)
+		if _, err := rand.Read(randomByte); err != nil {
+			return "", err
+		}
+		b[i] = charset[randomByte[0]%byte(len(charset))]
 	}
-	return base64.URLEncoding.EncodeToString(b)[:length], nil
+	return string(b), nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
