@@ -200,6 +200,11 @@ type KairosConfigStatus struct {
 	// +optional
 	DataSecretName *string `json:"dataSecretName,omitempty"`
 
+	// Initialization provides observations of the KairosConfig initialization process.
+	// NOTE: Fields in this struct are part of the Cluster API contract and are used to orchestrate initial Machine provisioning.
+	// +optional
+	Initialization *KairosConfigInitialization `json:"initialization,omitempty"`
+
 	// Conditions defines current service state of the KairosConfig
 	// Contract: BootstrapConfig SHOULD expose Conditions
 	// Standard CAPI conditions: Ready, BootstrapReady, DataSecretAvailable
@@ -219,6 +224,15 @@ type KairosConfigStatus struct {
 	// This field is set only when bootstrap fails permanently.
 	// +optional
 	FailureMessage string `json:"failureMessage,omitempty"`
+}
+
+// KairosConfigInitialization provides observations of the KairosConfig initialization process.
+// NOTE: Fields in this struct are part of the Cluster API contract, and they are used to orchestrate initial Machine provisioning.
+type KairosConfigInitialization struct {
+	// DataSecretCreated is true when the Machine's bootstrap secret is created.
+	// NOTE: this field is part of the Cluster API contract, and it is used to orchestrate initial Machine provisioning.
+	// +optional
+	DataSecretCreated bool `json:"dataSecretCreated,omitempty"`
 }
 
 // +kubebuilder:object:root=true

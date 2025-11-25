@@ -4,10 +4,6 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.17.0
-  labels:
-    cluster.x-k8s.io/provider: kairos
-    # Contract version labels - tells CAPI which contract versions this CRD supports
-    cluster.x-k8s.io/v1beta2: v1beta2
   name: kairosconfigs.bootstrap.cluster.x-k8s.io
 spec:
   group: bootstrap.cluster.x-k8s.io
@@ -379,6 +375,17 @@ spec:
                   FailureReason indicates the reason for bootstrap failure
                   This field is set only when bootstrap fails permanently.
                 type: string
+              initialization:
+                description: |-
+                  Initialization provides observations of the KairosConfig initialization process.
+                  NOTE: Fields in this struct are part of the Cluster API contract and are used to orchestrate initial Machine provisioning.
+                properties:
+                  dataSecretCreated:
+                    description: |-
+                      DataSecretCreated is true when the Machine's bootstrap secret is created.
+                      NOTE: this field is part of the Cluster API contract, and it is used to orchestrate initial Machine provisioning.
+                    type: boolean
+                type: object
               observedGeneration:
                 description: ObservedGeneration is the most recent generation observed
                   by the controller

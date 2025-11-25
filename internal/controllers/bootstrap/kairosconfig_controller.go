@@ -166,6 +166,11 @@ func (r *KairosConfigReconciler) reconcileBootstrapData(ctx context.Context, log
 			// Secret exists, verify it's ready
 			log.Info("Bootstrap data already generated", "secret", *kairosConfig.Status.DataSecretName)
 			kairosConfig.Status.Ready = true
+			// Ensure initialization.dataSecretCreated is set
+			if kairosConfig.Status.Initialization == nil {
+				kairosConfig.Status.Initialization = &bootstrapv1beta2.KairosConfigInitialization{}
+			}
+			kairosConfig.Status.Initialization.DataSecretCreated = true
 			return nil
 		}
 	}
@@ -219,6 +224,13 @@ func (r *KairosConfigReconciler) reconcileBootstrapData(ctx context.Context, log
 	// Update status with dataSecretName
 	kairosConfig.Status.DataSecretName = &secretName
 	kairosConfig.Status.Ready = true
+
+	// Set initialization.dataSecretCreated as required by Cluster API contract
+	// This field is used by the Machine controller to determine when bootstrap data is ready
+	if kairosConfig.Status.Initialization == nil {
+		kairosConfig.Status.Initialization = &bootstrapv1beta2.KairosConfigInitialization{}
+	}
+	kairosConfig.Status.Initialization.DataSecretCreated = true
 
 	log.Info("Bootstrap data secret created", "secret", secretName)
 	return nil
