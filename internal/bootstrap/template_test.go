@@ -202,3 +202,68 @@ func TestRenderK0sCloudConfig_WithSSHPublicKey(t *testing.T) {
 		t.Error("Missing SSH public key")
 	}
 }
+
+func TestRenderK0sCloudConfig_WithInstallConfig(t *testing.T) {
+	installConfig := &InstallConfig{
+		Auto:   true,
+		Device: "auto",
+		Reboot: true,
+	}
+
+	data := TemplateData{
+		Role:           "control-plane",
+		SingleNode:     true,
+		UserName:       "kairos",
+		UserPassword:   "kairos",
+		UserGroups:     []string{"admin"},
+		HostnamePrefix: "metal-",
+		Install:        installConfig,
+	}
+
+	result, err := RenderK0sCloudConfig(data)
+	if err != nil {
+		t.Fatalf("Failed to render template: %v", err)
+	}
+
+	// Check for install block
+	if !strings.Contains(result, "install:") {
+		t.Error("Missing install block")
+	}
+
+	// Check for install.auto
+	if !strings.Contains(result, "auto: true") {
+		t.Error("Missing install.auto: true")
+	}
+
+	// Check for install.device
+	if !strings.Contains(result, "device: \"auto\"") {
+		t.Error("Missing install.device: \"auto\"")
+	}
+
+	// Check for install.reboot
+	if !strings.Contains(result, "reboot: true") {
+		t.Error("Missing install.reboot: true")
+	}
+}
+
+func TestRenderK0sCloudConfig_WithoutInstallConfig(t *testing.T) {
+	data := TemplateData{
+		Role:           "control-plane",
+		SingleNode:     true,
+		UserName:       "kairos",
+		UserPassword:   "kairos",
+		UserGroups:     []string{"admin"},
+		HostnamePrefix: "metal-",
+		Install:        nil, // No install config
+	}
+
+	result, err := RenderK0sCloudConfig(data)
+	if err != nil {
+		t.Fatalf("Failed to render template: %v", err)
+	}
+
+	// Verify install block is NOT present when Install is nil
+	if strings.Contains(result, "install:") {
+		t.Error("Install block should not be present when Install is nil")
+	}
+}

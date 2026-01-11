@@ -13,10 +13,18 @@ Template inputs (from Go):
   .WorkerToken       string   // used only for workers
   .Manifests         []Manifest // optional manifests
   .HostnamePrefix    string   // e.g. "metal-"
+  .Install           *InstallConfig // install configuration (optional)
 */ -}}
 
 {{/* Hostname: we want to preserve Kairos templating: metal-{{ trunc 4 .MachineID }} */}}
 hostname: {{ .HostnamePrefix }}{{"{{ trunc 4 .MachineID }}"}}
+
+{{- if .Install }}
+install:
+  auto: {{ .Install.Auto }}
+  device: "{{ .Install.Device }}"
+  reboot: {{ .Install.Reboot }}
+{{- end }}
 
 users:
 - name: {{ .UserName }}

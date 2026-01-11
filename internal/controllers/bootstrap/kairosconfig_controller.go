@@ -382,6 +382,25 @@ func (r *KairosConfigReconciler) generateK0sCloudConfig(ctx context.Context, log
 		hostnamePrefix = "metal-"
 	}
 
+	// Set install configuration (with defaults)
+	var installConfig *bootstrap.InstallConfig
+	if kairosConfig.Spec.Install != nil {
+		installConfig = &bootstrap.InstallConfig{
+			Auto:   true,   // Default to true
+			Device: "auto", // Default to "auto"
+			Reboot: true,   // Default to true
+		}
+		if kairosConfig.Spec.Install.Auto != nil {
+			installConfig.Auto = *kairosConfig.Spec.Install.Auto
+		}
+		if kairosConfig.Spec.Install.Device != "" {
+			installConfig.Device = kairosConfig.Spec.Install.Device
+		}
+		if kairosConfig.Spec.Install.Reboot != nil {
+			installConfig.Reboot = *kairosConfig.Spec.Install.Reboot
+		}
+	}
+
 	// Build template data
 	templateData := bootstrap.TemplateData{
 		Role:           role,
@@ -394,6 +413,7 @@ func (r *KairosConfigReconciler) generateK0sCloudConfig(ctx context.Context, log
 		WorkerToken:    workerToken,
 		Manifests:      kairosConfig.Spec.Manifests,
 		HostnamePrefix: hostnamePrefix,
+		Install:        installConfig,
 	}
 
 	// Render template

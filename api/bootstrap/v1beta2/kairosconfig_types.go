@@ -138,6 +138,33 @@ type KairosConfigSpec struct {
 	// +kubebuilder:default=metal-
 	// +optional
 	HostnamePrefix string `json:"hostnamePrefix,omitempty"`
+
+	// Install specifies the Kairos installation configuration
+	// This controls how Kairos OS is installed to disk
+	// +optional
+	Install *InstallConfig `json:"install,omitempty"`
+}
+
+// InstallConfig specifies the Kairos installation configuration
+type InstallConfig struct {
+	// Auto enables automatic installation to disk
+	// When true, Kairos will automatically install to the specified device
+	// +kubebuilder:default=true
+	// +optional
+	Auto *bool `json:"auto,omitempty"`
+
+	// Device specifies the target device for installation
+	// Use "auto" to automatically detect and use the first available disk
+	// Or specify a device path like "/dev/sda" or "/dev/nvme0n1"
+	// +kubebuilder:default=auto
+	// +optional
+	Device string `json:"device,omitempty"`
+
+	// Reboot specifies whether to reboot after installation
+	// When true, the system will reboot automatically after installation completes
+	// +kubebuilder:default=true
+	// +optional
+	Reboot *bool `json:"reboot,omitempty"`
 }
 
 // WorkerTokenSecretReference is a reference to a Secret containing a worker join token

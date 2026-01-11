@@ -152,6 +152,31 @@ spec:
                   For example, if HostnamePrefix is "metal-", the hostname will be "metal-{4-char-machine-id}"
                   Defaults to "metal-" if not specified
                 type: string
+              install:
+                description: |-
+                  Install specifies the Kairos installation configuration
+                  This controls how Kairos OS is installed to disk
+                properties:
+                  auto:
+                    default: true
+                    description: |-
+                      Auto enables automatic installation to disk
+                      When true, Kairos will automatically install to the specified device
+                    type: boolean
+                  device:
+                    default: auto
+                    description: |-
+                      Device specifies the target device for installation
+                      Use "auto" to automatically detect and use the first available disk
+                      Or specify a device path like "/dev/sda" or "/dev/nvme0n1"
+                    type: string
+                  reboot:
+                    default: true
+                    description: |-
+                      Reboot specifies whether to reboot after installation
+                      When true, the system will reboot automatically after installation completes
+                    type: boolean
+                type: object
               kubernetesVersion:
                 description: KubernetesVersion specifies the Kubernetes version to
                   install

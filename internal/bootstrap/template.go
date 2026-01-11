@@ -41,6 +41,14 @@ type TemplateData struct {
 	WorkerToken    string
 	Manifests      []bootstrapv1beta2.Manifest
 	HostnamePrefix string
+	Install        *InstallConfig
+}
+
+// InstallConfig holds installation configuration for the template
+type InstallConfig struct {
+	Auto   bool
+	Device string
+	Reboot bool
 }
 
 // RenderK0sCloudConfig renders the k0s Kairos cloud-config template
