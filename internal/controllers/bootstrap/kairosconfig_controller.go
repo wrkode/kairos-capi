@@ -128,9 +128,10 @@ func (r *KairosConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	// Reconcile bootstrap data
 	if err := r.reconcileBootstrapData(ctx, log, kairosConfig, machine, cluster); err != nil {
 		// Mark conditions as false on error
-		conditions.MarkFalse(kairosConfig, clusterv1.ReadyCondition, bootstrapv1beta2.BootstrapDataSecretGenerationFailedReason, clusterv1.ConditionSeverityWarning, err.Error())
-		conditions.MarkFalse(kairosConfig, bootstrapv1beta2.BootstrapReadyCondition, bootstrapv1beta2.BootstrapDataSecretGenerationFailedReason, clusterv1.ConditionSeverityWarning, err.Error())
-		conditions.MarkFalse(kairosConfig, bootstrapv1beta2.DataSecretAvailableCondition, bootstrapv1beta2.BootstrapDataSecretGenerationFailedReason, clusterv1.ConditionSeverityWarning, err.Error())
+		// Use "%s" as format string and pass error as argument to satisfy linter
+		conditions.MarkFalse(kairosConfig, clusterv1.ReadyCondition, bootstrapv1beta2.BootstrapDataSecretGenerationFailedReason, clusterv1.ConditionSeverityWarning, "%s", err.Error())
+		conditions.MarkFalse(kairosConfig, bootstrapv1beta2.BootstrapReadyCondition, bootstrapv1beta2.BootstrapDataSecretGenerationFailedReason, clusterv1.ConditionSeverityWarning, "%s", err.Error())
+		conditions.MarkFalse(kairosConfig, bootstrapv1beta2.DataSecretAvailableCondition, bootstrapv1beta2.BootstrapDataSecretGenerationFailedReason, clusterv1.ConditionSeverityWarning, "%s", err.Error())
 
 		kairosConfig.Status.FailureReason = bootstrapv1beta2.BootstrapDataSecretGenerationFailedReason
 		kairosConfig.Status.FailureMessage = err.Error()
