@@ -17,9 +17,10 @@ Template inputs (from Go):
   .ProviderID        string   // providerID for Node (e.g., "vsphere://<vm-uuid>")
 */ -}}
 
-{{/* Hostname: Use hostname prefix, trimming trailing dashes to avoid invalid hostnames */}}
+{{/* Hostname: Use hostname prefix with Kairos templating for machine ID */}}
+{{/* The {{ trunc 4 .MachineID }} is Kairos templating syntax, output literally */}}
 {{- if .HostnamePrefix }}
-hostname: {{ trimSuffix "-" .HostnamePrefix }}
+hostname: {{ .HostnamePrefix }}{{ "{{ trunc 4 .MachineID }}" }}
 {{- end }}
 
 {{- if .Install }}
