@@ -82,7 +82,7 @@ stages:
   initramfs:
     - name: "Create k0s post-bootstrap service and script"
       files:
-        - path: /etc/systemd/system/kairos-k0s-post-bootstrap.service
+        - path: /sysroot/etc/systemd/system/kairos-k0s-post-bootstrap.service
           permissions: "0644"
           owner: 0
           group: 0
@@ -104,7 +104,7 @@ stages:
             
             [Install]
             WantedBy=multi-user.target
-        - path: /etc/systemd/system/kairos-k0s-post-bootstrap-enable.service
+        - path: /sysroot/etc/systemd/system/kairos-k0s-post-bootstrap-enable.service
           permissions: "0644"
           owner: 0
           group: 0
@@ -122,7 +122,7 @@ stages:
             
             [Install]
             WantedBy=multi-user.target
-        - path: /usr/local/bin/kairos-k0s-post-bootstrap.sh
+        - path: /sysroot/usr/local/bin/kairos-k0s-post-bootstrap.sh
           permissions: "0755"
           owner: 0
           group: 0
@@ -147,6 +147,7 @@ MANIFEST_EOF
             {{- if .ProviderID }}
             # Wait for k0s to be ready and Node to be registered
             echo "Waiting for k0s node to be registered..."
+            export KUBECONFIG=/var/lib/k0s/pki/admin.conf
             MAX_WAIT=300
             ELAPSED=0
             while ! kubectl get node $(hostname) &>/dev/null; do
@@ -184,7 +185,7 @@ MANIFEST_EOF
             echo "k0s post-bootstrap tasks completed successfully"
       commands:
         # Create symlink to enable the helper service that enables the main service
-        - mkdir -p /etc/systemd/system/multi-user.target.wants
-        - ln -sf /etc/systemd/system/kairos-k0s-post-bootstrap-enable.service /etc/systemd/system/multi-user.target.wants/kairos-k0s-post-bootstrap-enable.service || true
+        - mkdir -p /sysroot/etc/systemd/system/multi-user.target.wants
+        - ln -sf /sysroot/etc/systemd/system/kairos-k0s-post-bootstrap-enable.service /sysroot/etc/systemd/system/multi-user.target.wants/kairos-k0s-post-bootstrap-enable.service || true
 
 {{- end }}

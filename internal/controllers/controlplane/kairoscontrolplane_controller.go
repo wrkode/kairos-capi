@@ -34,6 +34,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/clientcmd"
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
 	"sigs.k8s.io/cluster-api/util"
 	"sigs.k8s.io/cluster-api/util/conditions"
@@ -273,6 +274,12 @@ func (r *KairosControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.R
 				// Don't fail the reconcile for non-transient errors, just log
 			}
 		}
+	}
+
+	// Ensure Node providerID is set in the workload cluster once kubeconfig is available.
+	// This avoids relying on in-VM scripts and unblocks NodeRef reconciliation.
+	if err := r.ensureProviderIDOnNodes(ctx, log, kcp, cluster); err != nil {
+		log.Error(err, "Failed to ensure providerID on workload nodes")
 	}
 
 	// Update Cluster status
@@ -681,6 +688,15 @@ func (r *KairosControlPlaneReconciler) updateStatus(ctx context.Context, log log
 		log.V(4).Info("Control plane already initialized, readyReplicas confirmed", "readyReplicas", readyReplicas)
 	}
 
+	// Set initialization.controlPlaneInitialized for the CAPI v1beta2 contract.
+	// This field is used by the Cluster controller to set ControlPlaneInitialized.
+	if kcp.Status.Initialization.ControlPlaneInitialized == nil || *kcp.Status.Initialization.ControlPlaneInitialized != kcp.Status.Initialized {
+		initialized := kcp.Status.Initialized
+		kcp.Status.Initialization.ControlPlaneInitialized = &initialized
+		log.V(4).Info("Updated control plane initialization status",
+			"controlPlaneInitialized", initialized)
+	}
+
 	return nil
 }
 
@@ -789,6 +805,100 @@ func (r *KairosControlPlaneReconciler) reconcileKubeconfig(ctx context.Context, 
 	}
 
 	log.Info("Kubeconfig secret created/updated", "secret", secretName)
+	return nil
+}
+
+// ensureProviderIDOnNodes patches workload cluster Nodes with the Machine providerID.
+// This avoids relying on in-VM scripts and allows Machine-to-NodeRef matching.
+func (r *KairosControlPlaneReconciler) ensureProviderIDOnNodes(ctx context.Context, log logr.Logger, kcp *controlplanev1beta2.KairosControlPlane, cluster *clusterv1.Cluster) error {
+	secretName := fmt.Sprintf("%s-kubeconfig", cluster.Name)
+	secretKey := types.NamespacedName{
+		Name:      secretName,
+		Namespace: cluster.Namespace,
+	}
+	secret := &corev1.Secret{}
+	if err := r.Get(ctx, secretKey, secret); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+
+	kubeconfig, ok := secret.Data["value"]
+	if !ok || len(kubeconfig) == 0 {
+		return nil
+	}
+
+	restConfig, err := clientcmd.RESTConfigFromKubeConfig(kubeconfig)
+	if err != nil {
+		return fmt.Errorf("failed to build workload rest config: %w", err)
+	}
+
+	workloadClient, err := client.New(restConfig, client.Options{Scheme: r.Scheme})
+	if err != nil {
+		return fmt.Errorf("failed to create workload client: %w", err)
+	}
+
+	machines, err := r.getControlPlaneMachines(ctx, kcp, cluster)
+	if err != nil {
+		return err
+	}
+	if len(machines) == 0 {
+		return nil
+	}
+
+	nodeList := &corev1.NodeList{}
+	if err := workloadClient.List(ctx, nodeList); err != nil {
+		return fmt.Errorf("failed to list workload nodes: %w", err)
+	}
+
+	for _, machine := range machines {
+		if machine.Spec.ProviderID == nil || *machine.Spec.ProviderID == "" {
+			continue
+		}
+		if machine.Status.NodeRef != nil {
+			continue
+		}
+
+		addressSet := map[string]struct{}{}
+		for _, addr := range machine.Status.Addresses {
+			if addr.Address != "" {
+				addressSet[addr.Address] = struct{}{}
+			}
+		}
+
+		for i := range nodeList.Items {
+			node := &nodeList.Items[i]
+			matches := false
+			for _, addr := range node.Status.Addresses {
+				if _, ok := addressSet[addr.Address]; ok {
+					matches = true
+					break
+				}
+			}
+			if !matches {
+				continue
+			}
+
+			if node.Spec.ProviderID == *machine.Spec.ProviderID {
+				log.V(4).Info("Node already has providerID", "node", node.Name, "providerID", node.Spec.ProviderID)
+				break
+			}
+
+			patchBase := node.DeepCopy()
+			node.Spec.ProviderID = *machine.Spec.ProviderID
+			if err := workloadClient.Patch(ctx, node, client.MergeFrom(patchBase)); err != nil {
+				return fmt.Errorf("failed to patch node providerID: %w", err)
+			}
+
+			log.Info("Patched workload node providerID",
+				"node", node.Name,
+				"providerID", node.Spec.ProviderID,
+				"machine", machine.Name)
+			break
+		}
+	}
+
 	return nil
 }
 

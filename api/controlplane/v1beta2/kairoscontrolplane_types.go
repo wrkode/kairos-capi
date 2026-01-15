@@ -117,6 +117,11 @@ type KairosControlPlaneStatus struct {
 	// +optional
 	Initialized bool `json:"initialized,omitempty"`
 
+	// Initialization provides observations of the control plane initialization process.
+	// This is part of the Cluster API v1beta2 contract.
+	// +optional
+	Initialization KairosControlPlaneInitializationStatus `json:"initialization,omitempty,omitzero"`
+
 	// ReadyReplicas is the number of control plane machines that are ready
 	// Contract: ControlPlane MUST expose readyReplicas
 	// A machine is considered ready when it has a NodeRef and the Node is ready.
@@ -166,6 +171,14 @@ type KairosControlPlaneStatus struct {
 	// This is used to identify machines belonging to this control plane.
 	// +optional
 	Selector string `json:"selector,omitempty"`
+}
+
+// KairosControlPlaneInitializationStatus provides observations of the control plane initialization process.
+// +kubebuilder:validation:MinProperties=1
+type KairosControlPlaneInitializationStatus struct {
+	// ControlPlaneInitialized is true when the control plane is initialized and can accept requests.
+	// +optional
+	ControlPlaneInitialized *bool `json:"controlPlaneInitialized,omitempty"`
 }
 
 // +kubebuilder:object:root=true

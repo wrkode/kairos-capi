@@ -274,17 +274,10 @@ func (r *KairosConfigReconciler) reconcileBootstrapData(ctx context.Context, log
 			}
 
 			if needsRegeneration {
-				// Delete the old secret and clear dataSecretName to trigger regeneration
-				log.Info("Deleting old bootstrap secret for regeneration", "secret", *kairosConfig.Status.DataSecretName)
-				if err := r.Delete(ctx, secret); err != nil && !apierrors.IsNotFound(err) {
-					log.Error(err, "Failed to delete old bootstrap secret", "secret", *kairosConfig.Status.DataSecretName)
-					// Continue anyway - we'll try to create a new one
-				}
-				kairosConfig.Status.DataSecretName = nil
-				kairosConfig.Status.Ready = false
-				if kairosConfig.Status.Initialization != nil {
-					kairosConfig.Status.Initialization.DataSecretCreated = false
-				}
+				// Keep the existing secret name and regenerate its contents.
+				// The Machine's bootstrap dataSecretName is immutable, so we must not change it.
+				log.Info("Bootstrap secret needs regeneration; will update existing secret",
+					"secret", *kairosConfig.Status.DataSecretName)
 			} else {
 				// Secret exists and is up-to-date, verify it's ready
 				log.V(4).Info("Bootstrap data already generated and up-to-date", "secret", *kairosConfig.Status.DataSecretName)
@@ -315,11 +308,21 @@ func (r *KairosConfigReconciler) reconcileBootstrapData(ctx context.Context, log
 	// Do NOT base64 encode it ourselves - let CAPV handle the encoding
 
 	// Create Secret with bootstrap data
-	randomSuffix, err := randomString(6)
-	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to generate random string: %w", err)
+	secretName := ""
+	if kairosConfig.Status.DataSecretName != nil {
+		secretName = *kairosConfig.Status.DataSecretName
+	} else {
+		randomSuffix, err := randomString(6)
+		if err != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to generate random string: %w", err)
+		}
+		secretName = fmt.Sprintf("%s-%s", kairosConfig.Name, randomSuffix)
 	}
-	secretName := fmt.Sprintf("%s-%s", kairosConfig.Name, randomSuffix)
+
+	secretKey := types.NamespacedName{
+		Name:      secretName,
+		Namespace: kairosConfig.Namespace,
+	}
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      secretName,
@@ -343,13 +346,22 @@ func (r *KairosConfigReconciler) reconcileBootstrapData(ctx context.Context, log
 		},
 	}
 
-	if err := r.Create(ctx, secret); err != nil {
-		if apierrors.IsAlreadyExists(err) {
-			// Secret already exists, use it
-			if err := r.Get(ctx, types.NamespacedName{Name: secretName, Namespace: kairosConfig.Namespace}, secret); err != nil {
+	// Create or update the secret in-place to preserve the name referenced by Machine
+	existingSecret := &corev1.Secret{}
+	if err := r.Get(ctx, secretKey, existingSecret); err != nil {
+		if apierrors.IsNotFound(err) {
+			if err := r.Create(ctx, secret); err != nil {
 				return ctrl.Result{}, err
 			}
 		} else {
+			return ctrl.Result{}, err
+		}
+	} else {
+		existingSecret.Type = secret.Type
+		existingSecret.Labels = secret.Labels
+		existingSecret.OwnerReferences = secret.OwnerReferences
+		existingSecret.Data = secret.Data
+		if err := r.Update(ctx, existingSecret); err != nil {
 			return ctrl.Result{}, err
 		}
 	}

@@ -270,6 +270,17 @@ spec:
                   FailureReason indicates the reason for control plane failure
                   This field is set only when the control plane fails permanently.
                 type: string
+              initialization:
+                description: |-
+                  Initialization provides observations of the control plane initialization process.
+                  This is part of the Cluster API v1beta2 contract.
+                minProperties: 1
+                properties:
+                  controlPlaneInitialized:
+                    description: ControlPlaneInitialized is true when the control
+                      plane is initialized and can accept requests.
+                    type: boolean
+                type: object
               initialized:
                 description: |-
                   Initialized indicates whether the control plane has been initialized
