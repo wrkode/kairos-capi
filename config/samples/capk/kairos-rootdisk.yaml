@@ -1,0 +1,14 @@
+apiVersion: cdi.kubevirt.io/v1beta1
+kind: DataVolume
+metadata:
+  name: kairos-rootdisk
+  namespace: default
+spec:
+  source:
+    upload: {}
+  pvc:
+    accessModes: ["ReadWriteOnce"]
+    resources:
+      requests:
+        storage: 6Gi
+    storageClassName: local-path

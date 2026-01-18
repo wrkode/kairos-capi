@@ -1,0 +1,54 @@
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: KubevirtMachineTemplate
+metadata:
+  name: kairos-control-plane-template
+  namespace: default
+spec:
+  template:
+    spec:
+      virtualMachineTemplate:
+        spec:
+          runStrategy: Always
+          template:
+            metadata:
+              labels:
+                kubevirt.io/domain: kairos-control-plane-template
+            spec:
+              domain:
+                cpu:
+                  cores: 2
+                  # Use qemu64 for software emulation environments without /dev/kvm
+                  model: qemu64
+                resources:
+                  requests:
+                    memory: 4Gi
+                devices:
+                  disks:
+                  - name: installeriso
+                    cdrom:
+                      bus: sata
+                    bootOrder: 1
+                  - name: rootdisk
+                    disk:
+                      bus: virtio
+                    bootOrder: 2
+                  interfaces:
+                  - name: default
+                    masquerade: {}
+                features:
+                  acpi:
+                    enabled: true
+                firmware:
+                  bootloader:
+                    efi:
+                      secureBoot: false
+              networks:
+              - name: default
+                pod: {}
+              volumes:
+              - name: installeriso
+                dataVolume:
+                  name: kairos-rootdisk
+              - name: rootdisk
+                dataVolume:
+                  name: kairos-install-disk

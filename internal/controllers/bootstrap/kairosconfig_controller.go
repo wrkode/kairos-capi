@@ -660,6 +660,8 @@ func randomString(length int) (string, error) {
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *KairosConfigReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	log := ctrl.Log.WithName("KairosConfig")
+
 	// Create unstructured VSphereMachine object for watching
 	vsphereMachineGVK := schema.GroupVersionKind{
 		Group:   "infrastructure.cluster.x-k8s.io",
@@ -686,7 +688,7 @@ func (r *KairosConfigReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	kubevirtMachineAlpha4 := &unstructured.Unstructured{}
 	kubevirtMachineAlpha4.SetGroupVersionKind(kubevirtMachineGVKAlpha4)
 
-	return ctrl.NewControllerManagedBy(mgr).
+	builder := ctrl.NewControllerManagedBy(mgr).
 		For(&bootstrapv1beta2.KairosConfig{}).
 		Watches(
 			&clusterv1.Machine{},
@@ -699,12 +701,23 @@ func (r *KairosConfigReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(
 			kubevirtMachineAlpha1,
 			handler.EnqueueRequestsFromMapFunc(r.kubevirtMachineToKairosConfig),
-		).
-		Watches(
+		)
+
+	if r.gvkExists(mgr, kubevirtMachineGVKAlpha4) {
+		builder = builder.Watches(
 			kubevirtMachineAlpha4,
 			handler.EnqueueRequestsFromMapFunc(r.kubevirtMachineToKairosConfig),
-		).
-		Complete(r)
+		)
+	} else {
+		log.V(2).Info("Skipping watch: KubevirtMachine v1alpha4 CRD not installed")
+	}
+
+	return builder.Complete(r)
+}
+
+func (r *KairosConfigReconciler) gvkExists(mgr ctrl.Manager, gvk schema.GroupVersionKind) bool {
+	_, err := mgr.GetRESTMapper().RESTMapping(gvk.GroupKind(), gvk.Version)
+	return err == nil
 }
 
 // machineToKairosConfig maps a Machine to its KairosConfig

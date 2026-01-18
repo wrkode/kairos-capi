@@ -9,41 +9,42 @@
 #    - kubevirt-env upload-kairos-image
 #
 # 3. Update the KubeVirtMachineTemplate below:
-#    - Set storageClassName if needed
 #    - Adjust CPU/memory/disk sizes
-#    - Set the dataVolumeTemplates source PVC to your uploaded image
+#    - If using a cloud disk image, set the rootdisk DataVolume name to that image
+#    - If using an ISO, set installeriso to the ISO DataVolume and
+#      create a blank install disk DataVolume (kairos-install-disk)
 #
 # 4. Apply the manifest:
-#    - kubectl apply -f config/samples/capk/kairos_cluster_k0s_single_node.yaml
+#    - kubectl apply -f config/samples/capk/kubevirt_cluster_k0s_single_node.yaml
 #
 # ============================================================================
 
 apiVersion: cluster.x-k8s.io/v1beta2
 kind: Cluster
 metadata:
-  name: kairos-cluster
+  name: kairos-cluster-kv
   namespace: default
 spec:
   infrastructureRef:
     apiGroup: infrastructure.cluster.x-k8s.io
     kind: KubevirtCluster
-    name: kairos-cluster
+    name: kairos-cluster-kv
   controlPlaneRef:
     apiGroup: controlplane.cluster.x-k8s.io
     kind: KairosControlPlane
-    name: kairos-control-plane
+    name: kairos-control-plane-kv
 ---
-apiVersion: infrastructure.cluster.x-k8s.io/v1alpha4
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
 kind: KubevirtCluster
 metadata:
-  name: kairos-cluster
+  name: kairos-cluster-kv
   namespace: default
 spec: {}
 ---
 apiVersion: controlplane.cluster.x-k8s.io/v1beta2
 kind: KairosControlPlane
 metadata:
-  name: kairos-control-plane
+  name: kairos-control-plane-kv
   namespace: default
 spec:
   replicas: 1
@@ -52,53 +53,45 @@ spec:
     infrastructureRef:
       apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
       kind: KubevirtMachineTemplate
-      name: kairos-control-plane-template
+      name: kairos-control-plane-template-hostmodel
       namespace: default
   kairosConfigTemplate:
     name: kairos-config-template-control-plane
 ---
-apiVersion: infrastructure.cluster.x-k8s.io/v1alpha4
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
 kind: KubevirtMachineTemplate
 metadata:
-  name: kairos-control-plane-template
+  name: kairos-control-plane-template-hostmodel
   namespace: default
 spec:
   template:
     spec:
       virtualMachineTemplate:
         spec:
-          dataVolumeTemplates:
-          - apiVersion: cdi.kubevirt.io/v1beta1
-            kind: DataVolume
-            metadata:
-              name: kairos-rootdisk
-            spec:
-              pvc:
-                accessModes:
-                - ReadWriteOnce
-                resources:
-                  requests:
-                    storage: 30Gi
-                # TODO: Set storageClassName if needed
-                # storageClassName: standard
-              source:
-                pvc:
-                  name: kairos-kubevirt
-                  namespace: default
-          running: true
+          runStrategy: Always
           template:
+            metadata:
+              labels:
+                kubevirt.io/domain: kairos-control-plane-template
             spec:
               domain:
                 cpu:
                   cores: 2
-                memory:
-                  guest: 4Gi
+                  # Use host-model to match KubeVirt CPU model labels
+                  model: host-model
+                resources:
+                  requests:
+                    memory: 4Gi
                 devices:
                   disks:
-                  - name: rootdisk
+                  - name: installeriso
+                    cdrom:
+                      bus: sata
                     bootOrder: 1
+                  - name: rootdisk
                     disk:
                       bus: virtio
+                    bootOrder: 2
                   interfaces:
                   - name: default
                     masquerade: {}
@@ -115,9 +108,12 @@ spec:
               - name: default
                 pod: {}
               volumes:
-              - name: rootdisk
+              - name: installeriso
                 dataVolume:
                   name: kairos-rootdisk
+              - name: rootdisk
+                dataVolume:
+                  name: kairos-install-disk
 ---
 apiVersion: bootstrap.cluster.x-k8s.io/v1beta2
 kind: KairosConfigTemplate
@@ -130,6 +126,10 @@ spec:
       role: control-plane
       distribution: k0s
       kubernetesVersion: "v1.34.1+k0s.1"
+      install:
+        auto: true
+        device: "/dev/vda"
+        reboot: true
       userName: kairos
       userPassword: kairos
       userGroups:
