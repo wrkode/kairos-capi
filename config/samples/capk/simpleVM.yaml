@@ -1,7 +1,7 @@
 apiVersion: kubevirt.io/v1
 kind: VirtualMachine
 metadata:
-  name: testvm
+  name: testvm2
   namespace: default
 spec:
   running: true
@@ -10,6 +10,12 @@ spec:
       labels:
         kubevirt.io/domain: testvm
     spec:
+      nodeSelector:
+        kubernetes.io/hostname: grogu
+      networks:
+      - name: default
+        multus:
+          networkName: lan-bridge  
       domain:
         cpu:
           cores: 1
@@ -17,6 +23,9 @@ spec:
           requests:
             memory: 512Mi
         devices:
+          interfaces:
+          - name: default
+            bridge: {}
           disks:
           - name: containerdisk
             disk:

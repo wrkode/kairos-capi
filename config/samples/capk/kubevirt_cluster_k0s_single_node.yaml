@@ -79,12 +79,12 @@ spec:
                 kubernetes.io/hostname: grogu
               domain:
                 cpu:
-                  cores: 2
+                  cores: 8
                   # Use host-model to match KubeVirt CPU model labels
                   model: host-passthrough
                 resources:
                   requests:
-                    memory: 4Gi
+                    memory: 12Gi
                 devices:
                   disks:
                   # Match testVM behavior: install disk first, ISO second.
@@ -98,7 +98,7 @@ spec:
                     bootOrder: 1
                   interfaces:
                   - name: default
-                    masquerade: {}
+                    bridge: {}
                 features:
                   smm:
                     enabled: true
@@ -112,7 +112,8 @@ spec:
                       secureBoot: true
               networks:
               - name: default
-                pod: {}
+                multus:
+                  networkName: lan-bridge
               volumes:
               - name: installeriso
                 dataVolume:
