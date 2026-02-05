@@ -1,6 +1,6 @@
 # Kairos CAPI Provider
 
-<span style="background-color: #ff0; color: #000; padding: 2px 4px;">Important: repo is under active development and not ready for production or testing deployments.</span>
+**Important: This repo is under active development and not ready for production or testing deployments.**
 
 Cluster API providers for Kairos OS.
 
