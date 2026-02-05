@@ -533,8 +533,22 @@ MANIFEST_EOF
 
 {{- /* DNS overrides and post-bootstrap service */}}
 stages:
-{{- if .DNSServers }}
   boot:
+    - name: "Ensure SSH service is enabled"
+      commands:
+        - systemctl enable --now sshd || systemctl enable --now ssh || true
+    - name: "Allow SSH password authentication"
+      files:
+        - path: /etc/ssh/sshd_config.d/60-kairos-capi.conf
+          permissions: "0644"
+          owner: 0
+          group: 0
+          content: |
+            PasswordAuthentication yes
+            KbdInteractiveAuthentication yes
+      commands:
+        - mkdir -p /etc/ssh/sshd_config.d
+        - systemctl restart sshd || systemctl restart ssh || true
     {{- if .DNSServers }}
     - name: "Configure DNS resolvers for early boot"
       dns:
@@ -544,7 +558,6 @@ stages:
         {{- end }}
         path: "/etc/resolv.conf"
     {{- end }}
-{{- end }}
   initramfs:
     - name: "Create k0s post-bootstrap service and script"
       files:
@@ -727,11 +740,20 @@ MANIFEST_EOF
               echo "WARN: failed to push kubeconfig to management cluster (status ${status})"
               return 1
             }
+            if [ "${KAIROS_REPUSH_KUBECONFIG}" = "true" ]; then
+              for i in {1..12}; do
+                if push_kubeconfig; then
+                  break
+                fi
+                echo "Retrying kubeconfig push after cert update ($i/12)..."
+                sleep 5
+              done
+            fi
             if ! push_kubeconfig; then
               echo "WARN: kubeconfig push failed; proceeding without blocking bootstrap"
             fi
             {{- end }}
-
+            
             # Mark bootstrap success for CAPI/CAPK consumers
             # This file is used by Cluster API to determine bootstrap completion
             mkdir -p /run/cluster-api

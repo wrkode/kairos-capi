@@ -205,6 +205,31 @@ func TestRenderK0sCloudConfig_CapkBootstrapTrap(t *testing.T) {
 	}
 }
 
+func TestRenderK0sCloudConfig_CapvTemplateExcludesCapkBlocks(t *testing.T) {
+	data := TemplateData{
+		Role:         "control-plane",
+		SingleNode:   true,
+		UserName:     "kairos",
+		UserPassword: "kairos",
+		UserGroups:   []string{"admin"},
+	}
+
+	result, err := RenderK0sCloudConfig(data)
+	if err != nil {
+		t.Fatalf("Failed to render template: %v", err)
+	}
+
+	if strings.Contains(result, "kairos-k0s-lb-sans.service") {
+		t.Error("CAPV template should not include KubeVirt LB SAN service")
+	}
+	if strings.Contains(result, "KAIROS_LB_ENDPOINT") {
+		t.Error("CAPV template should not include KubeVirt LB endpoint handling")
+	}
+	if strings.Contains(result, "Push kubeconfig to management cluster without SSH") {
+		t.Error("CAPV template should not include KubeVirt kubeconfig push")
+	}
+}
+
 func TestRenderK0sCloudConfig_WithManifests(t *testing.T) {
 	data := TemplateData{
 		Role:           "control-plane",

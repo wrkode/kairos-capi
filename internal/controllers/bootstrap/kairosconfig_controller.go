@@ -338,6 +338,10 @@ func (r *KairosConfigReconciler) reconcileBootstrapData(ctx context.Context, log
 					// Check if there's a k0s post-bootstrap service (indicating providerID was included)
 					// If Machine has providerID but secret has no service, we need to regenerate
 					hasK0sPostBootstrapService := strings.Contains(cloudConfigStr, "kairos-k0s-post-bootstrap.service")
+					// Ensure SSH enable stage exists (regression guard for CAPV access)
+					hasSSHEnableStage := strings.Contains(cloudConfigStr, "systemctl enable --now sshd") ||
+						strings.Contains(cloudConfigStr, "systemctl enable --now ssh")
+					hasSSHPassAuth := strings.Contains(cloudConfigStr, "PasswordAuthentication yes")
 
 					if currentProviderID != "" && (!hasProviderIDInSecret || !hasK0sPostBootstrapService) {
 						log.Info("Bootstrap secret missing providerID in k0s post-bootstrap service, regenerating to include it",
@@ -345,6 +349,11 @@ func (r *KairosConfigReconciler) reconcileBootstrapData(ctx context.Context, log
 							"providerID", currentProviderID,
 							"hasProviderIDInSecret", hasProviderIDInSecret,
 							"hasK0sPostBootstrapService", hasK0sPostBootstrapService)
+						needsRegeneration = true
+					}
+					if !hasSSHEnableStage || !hasSSHPassAuth {
+						log.Info("Bootstrap secret missing SSH settings, regenerating",
+							"secret", *kairosConfig.Status.DataSecretName)
 						needsRegeneration = true
 					}
 				}

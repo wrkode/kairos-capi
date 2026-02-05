@@ -70,8 +70,12 @@ type InstallConfig struct {
 
 // RenderK0sCloudConfig renders the k0s Kairos cloud-config template
 func RenderK0sCloudConfig(data TemplateData) (string, error) {
-	// Load template
-	tmplContent, err := templateFS.ReadFile("templates/k0s_kairos_cloud_config.yaml.tmpl")
+	// Load template (split per provider)
+	templatePath := "templates/k0s_kairos_cloud_config_capv.yaml.tmpl"
+	if data.IsKubeVirt {
+		templatePath = "templates/k0s_kairos_cloud_config_capk.yaml.tmpl"
+	}
+	tmplContent, err := templateFS.ReadFile(templatePath)
 	if err != nil {
 		return "", fmt.Errorf("failed to read template: %w", err)
 	}
