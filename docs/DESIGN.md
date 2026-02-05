@@ -75,13 +75,17 @@ The Bootstrap Provider implements the BootstrapConfig contract (v1beta2) and gen
 
 #### Cloud-Config Generation
 
-The controller generates Kairos cloud-config using Kairos's native k0s integration:
+The controller generates Kairos cloud-config using provider-specific templates and Kairos's native k0s integration:
 
 1. Uses `k0s:` block for control-plane nodes (with optional `--single` for single-node mode)
 2. Uses `k0s-worker:` block for worker nodes with token file
 3. Configures users with SSH keys (GitHub or raw public key)
 4. Writes worker tokens to `/etc/k0s/token` via `write_files`
 5. Deploys Kubernetes manifests to `/var/lib/k0s/manifests/` for automatic application
+
+Provider-specific behavior:
+- CAPV uses a CAPV-focused template and retrieves kubeconfig over SSH.
+- CAPK uses a CAPK-focused template with LoadBalancer-based control plane endpoint handling and in-guest kubeconfig push to the management cluster.
 
 Single-node mode is determined by:
 - `KairosConfig.spec.singleNode` (explicit flag), OR
@@ -163,8 +167,7 @@ The controller:
 ## Known Limitations (MVP)
 
 1. **Single Control Plane**: Only supports single control plane node (no HA)
-2. **Infrastructure Integration**: Infrastructure machine creation is a placeholder - requires provider-specific implementation
-3. **k0s Only**: k3s distribution not yet implemented
+2. **k0s Only**: k3s distribution not yet implemented
 4. **No Upgrades**: Upgrade logic is minimal
 5. **API Version**: Currently using v1beta2 API types, but compatible with CAPI v1.8+ (may need adjustment for v1.11+)
 

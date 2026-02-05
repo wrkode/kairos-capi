@@ -92,6 +92,9 @@ kubectl --kubeconfig=kairos-kubeconfig.yaml get nodes
 kubectl --kubeconfig=kairos-kubeconfig.yaml get pods -n kube-system
 ```
 
+Notes:
+- Kubeconfig retrieval uses SSH to the control plane node. Ensure SSH access is available for the Kairos user credentials in your KairosConfigTemplate.
+
 ## Troubleshooting
 
 ### Cluster Not Ready

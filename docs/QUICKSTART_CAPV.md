@@ -236,7 +236,7 @@ spec:
       distribution: k0s
       kubernetesVersion: "v1.30.0+k0s.0"
       userName: kairos
-      userPassword: kairos                    # TODO: Change for production
+      userPassword: kairos                    # TODO: Change for non-dev usage
       userGroups:
         - admin
       githubUser: "your-github-username"      # TODO: Add your GitHub user
@@ -281,6 +281,10 @@ kubectl --kubeconfig=kairos-kubeconfig.yaml get nodes
 # Verify k0s is running
 kubectl --kubeconfig=kairos-kubeconfig.yaml get pods -n kube-system
 ```
+
+Notes:
+- CAPV kubeconfig retrieval uses SSH to the control plane node.
+- Ensure SSH access is enabled for the Kairos user credentials you set in the template.
 
 ## Field Reference
 
