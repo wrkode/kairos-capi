@@ -235,11 +235,6 @@ spec:
                           PodCIDR configures the pod network CIDR for k0s
                           Defaults to k0s defaults if not specified.
                         type: string
-                      primaryIP:
-                        description: |-
-                          PrimaryIP overrides the detected node IP for KubeVirt control-plane
-                          certificates and endpoint configuration. This sets KAIROS_PRIMARY_IP.
-                        type: string
                       postCommands:
                         description: PostCommands are commands to run after k0s/k3s
                           installation
@@ -252,6 +247,11 @@ spec:
                         items:
                           type: string
                         type: array
+                      primaryIP:
+                        description: |-
+                          PrimaryIP overrides the detected node IP for KubeVirt control-plane
+                          certificates and endpoint configuration. This sets KAIROS_PRIMARY_IP.
+                        type: string
                       role:
                         default: worker
                         description: Role indicates whether this is a control-plane

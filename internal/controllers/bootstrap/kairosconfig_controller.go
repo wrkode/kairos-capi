@@ -21,6 +21,7 @@ import (
 	"crypto/rand"
 	"crypto/sha1"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -50,6 +51,10 @@ import (
 	"github.com/wrkode/kairos-capi/internal/bootstrap"
 )
 
+const controlPlaneLBServiceSuffix = "control-plane-lb"
+
+var errLBEndpointNotReady = errors.New("control plane load balancer endpoint not ready")
+
 // KairosConfigReconciler reconciles a KairosConfig object
 type KairosConfigReconciler struct {
 	client.Client
@@ -64,10 +69,12 @@ type KairosConfigReconciler struct {
 //+kubebuilder:rbac:groups=cluster.x-k8s.io,resources=machines/status;clusters/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=infrastructure.cluster.x-k8s.io,resources=vspheremachines,verbs=get;list;watch
 //+kubebuilder:rbac:groups=infrastructure.cluster.x-k8s.io,resources=vspheremachines/status,verbs=get
+//+kubebuilder:rbac:groups=kubevirt.io,resources=virtualmachineinstances,verbs=get
 //+kubebuilder:rbac:groups="",resources=secrets;events,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups="",resources=serviceaccounts;serviceaccounts/token,verbs=get;list;watch;create;update;patch
 //+kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings,verbs=get;list;watch;create;update;patch
 //+kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch
+//+kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch
 //+kubebuilder:rbac:groups=coordination.k8s.io,resources=leases,verbs=create;get;list;update;patch;watch
 //+kubebuilder:rbac:groups=cert-manager.io,resources=certificates,verbs=get;list;watch
 //+kubebuilder:rbac:groups=admissionregistration.k8s.io,resources=mutatingwebhookconfigurations;validatingwebhookconfigurations,verbs=get;list;patch;update
@@ -379,6 +386,10 @@ func (r *KairosConfigReconciler) reconcileBootstrapData(ctx context.Context, log
 	// Generate Kairos cloud-config
 	cloudConfig, err := r.generateCloudConfig(ctx, log, kairosConfig, machine, cluster)
 	if err != nil {
+		if errors.Is(err, errLBEndpointNotReady) {
+			log.Info("Waiting for control plane LoadBalancer endpoint before generating cloud-config")
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
 		return ctrl.Result{}, fmt.Errorf("failed to generate cloud-config: %w", err)
 	}
 
@@ -835,9 +846,14 @@ func (r *KairosConfigReconciler) generateK0sCloudConfig(ctx context.Context, log
 		PodCIDR:                             kairosConfig.Spec.PodCIDR,
 		ServiceCIDR:                         kairosConfig.Spec.ServiceCIDR,
 		PrimaryIP:                           kairosConfig.Spec.PrimaryIP,
+		MachineName:                         "",
+		ClusterNS:                           "",
 		IsKubeVirt:                          isKubevirtMachine(machine),
 		Install:                             installConfig,
 		ProviderID:                          providerID,
+		ControlPlaneLBServiceName:           "",
+		ControlPlaneLBServiceNamespace:      "",
+		ControlPlaneLBEndpoint:              "",
 		ManagementKubeconfigToken:           "",
 		ManagementKubeconfigSecretName:      "",
 		ManagementKubeconfigSecretNamespace: "",
@@ -849,9 +865,51 @@ func (r *KairosConfigReconciler) generateK0sCloudConfig(ctx context.Context, log
 		templateData.ManagementKubeconfigSecretNamespace = kubeconfigPush.SecretNamespace
 		templateData.ManagementAPIServer = kubeconfigPush.APIServer
 	}
+	if machine != nil {
+		templateData.MachineName = machine.Name
+	}
+	if cluster != nil {
+		templateData.ClusterNS = cluster.Namespace
+		templateData.ControlPlaneLBServiceName = fmt.Sprintf("%s-%s", cluster.Name, controlPlaneLBServiceSuffix)
+		templateData.ControlPlaneLBServiceNamespace = cluster.Namespace
+	}
+	if cluster != nil && isKubevirtMachine(machine) && role == "control-plane" {
+		lbEndpoint, err := r.getControlPlaneLBEndpoint(ctx, cluster.Namespace, templateData.ControlPlaneLBServiceName)
+		if err != nil {
+			return "", err
+		}
+		if lbEndpoint == "" {
+			return "", errLBEndpointNotReady
+		}
+		templateData.ControlPlaneLBEndpoint = lbEndpoint
+	}
 
 	// Render template
 	return bootstrap.RenderK0sCloudConfig(templateData)
+}
+
+func (r *KairosConfigReconciler) getControlPlaneLBEndpoint(ctx context.Context, namespace, name string) (string, error) {
+	if namespace == "" || name == "" {
+		return "", nil
+	}
+	service := &corev1.Service{}
+	if err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, service); err != nil {
+		if apierrors.IsNotFound(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	if len(service.Status.LoadBalancer.Ingress) == 0 {
+		return "", nil
+	}
+	ingress := service.Status.LoadBalancer.Ingress[0]
+	if ingress.IP != "" {
+		return ingress.IP, nil
+	}
+	if ingress.Hostname != "" {
+		return ingress.Hostname, nil
+	}
+	return "", nil
 }
 
 func (r *KairosConfigReconciler) reconcileDelete(ctx context.Context, log logr.Logger, kairosConfig *bootstrapv1beta2.KairosConfig) (ctrl.Result, error) {
@@ -925,6 +983,16 @@ func (r *KairosConfigReconciler) ensureKubeconfigPushConfig(ctx context.Context,
 				Resources:     []string{"secrets"},
 				ResourceNames: []string{secretName},
 				Verbs:         []string{"get", "create", "update", "patch"},
+			},
+			{
+				APIGroups: []string{"kubevirt.io"},
+				Resources: []string{"virtualmachineinstances"},
+				Verbs:     []string{"get"},
+			},
+			{
+				APIGroups: []string{""},
+				Resources: []string{"services"},
+				Verbs:     []string{"get"},
 			},
 		}
 		if role.Labels == nil {

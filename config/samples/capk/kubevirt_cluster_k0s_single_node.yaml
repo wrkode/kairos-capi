@@ -25,6 +25,8 @@ metadata:
   name: kairos-cluster-kv
   namespace: default
 spec:
+  # CAPK requires a LoadBalancer Service for the control-plane API.
+  # Ensure a LoadBalancer implementation (e.g., MetalLB) is installed.
   infrastructureRef:
     apiGroup: infrastructure.cluster.x-k8s.io
     kind: KubevirtCluster

@@ -15,11 +15,12 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - events
-  - secrets
+  - endpoints
+  - serviceaccounts
+  - serviceaccounts/token
+  - services
   verbs:
   - create
-  - delete
   - get
   - list
   - patch
@@ -28,10 +29,11 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - serviceaccounts
-  - serviceaccounts/token
+  - events
+  - secrets
   verbs:
   - create
+  - delete
   - get
   - list
   - patch
@@ -183,6 +185,12 @@ rules:
   - infrastructure.cluster.x-k8s.io
   resources:
   - vspheremachines/status
+  verbs:
+  - get
+- apiGroups:
+  - kubevirt.io
+  resources:
+  - virtualmachineinstances
   verbs:
   - get
 - apiGroups:

@@ -37,6 +37,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/tools/clientcmd"
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
 	"sigs.k8s.io/cluster-api/util"
@@ -60,6 +61,8 @@ type KairosControlPlaneReconciler struct {
 	Scheme *runtime.Scheme
 }
 
+const controlPlaneLBServiceSuffix = "control-plane-lb"
+
 //+kubebuilder:rbac:groups=controlplane.cluster.x-k8s.io,resources=kairoscontrolplanes,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=controlplane.cluster.x-k8s.io,resources=kairoscontrolplanes/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=controlplane.cluster.x-k8s.io,resources=kairoscontrolplanes/finalizers,verbs=update
@@ -67,6 +70,7 @@ type KairosControlPlaneReconciler struct {
 //+kubebuilder:rbac:groups=cluster.x-k8s.io,resources=clusters/status;machines/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=bootstrap.cluster.x-k8s.io,resources=kairosconfigs;kairosconfigtemplates,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=infrastructure.cluster.x-k8s.io,resources=*,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups="",resources=services;endpoints,verbs=get;list;watch;create;update;patch
 //+kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
 // Reconcile is part of the main kubernetes reconciliation loop
@@ -158,6 +162,13 @@ func (r *KairosControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.R
 	// Update status
 	if err := r.updateStatus(ctx, log, kcp, cluster); err != nil {
 		return ctrl.Result{}, err
+	}
+
+	// Ensure the control-plane LoadBalancer Service exists for KubeVirt clusters.
+	if isKubevirtControlPlane(kcp) {
+		if err := r.reconcileControlPlaneLB(ctx, log, kcp, cluster); err != nil {
+			log.Error(err, "Failed to reconcile control plane load balancer service")
+		}
 	}
 
 	// Retrieve and store kubeconfig if control plane infrastructure is ready
@@ -807,6 +818,11 @@ func (r *KairosControlPlaneReconciler) reconcileKubeconfig(ctx context.Context, 
 	if err := r.Get(ctx, secretKey, existingSecret); err == nil {
 		// Secret already exists, check if it's valid
 		if kubeconfig, ok := existingSecret.Data["value"]; ok && len(kubeconfig) > 0 {
+			if updated, err := r.ensureKubeconfigSecretMetadata(ctx, existingSecret, cluster); err != nil {
+				return err
+			} else if updated {
+				log.Info("Updated kubeconfig secret metadata", "secret", secretName)
+			}
 			log.V(4).Info("Kubeconfig secret already exists", "secret", secretName)
 			return nil
 		}
@@ -879,23 +895,14 @@ func (r *KairosControlPlaneReconciler) reconcileKubeconfig(ctx context.Context, 
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      secretName,
 			Namespace: cluster.Namespace,
-			Labels: map[string]string{
-				clusterv1.ClusterNameLabel: cluster.Name,
-			},
-			OwnerReferences: []metav1.OwnerReference{
-				{
-					APIVersion: cluster.APIVersion,
-					Kind:       cluster.Kind,
-					Name:       cluster.Name,
-					UID:        cluster.UID,
-					Controller: func() *bool { b := true; return &b }(),
-				},
-			},
 		},
 		Type: clusterv1.ClusterSecretType,
 		Data: map[string][]byte{
 			"value": kubeconfig,
 		},
+	}
+	if _, err := r.ensureKubeconfigSecretMetadata(ctx, secret, cluster); err != nil {
+		return err
 	}
 
 	if err := r.Create(ctx, secret); err != nil {
@@ -1294,6 +1301,18 @@ func isKubevirtMachine(machine *clusterv1.Machine) bool {
 	return kind == "KubevirtMachine" || kind == "KubeVirtMachine"
 }
 
+func isKubevirtControlPlane(kcp *controlplanev1beta2.KairosControlPlane) bool {
+	if kcp == nil {
+		return false
+	}
+	kind := kcp.Spec.MachineTemplate.InfrastructureRef.Kind
+	return kind == "KubevirtMachineTemplate" || kind == "KubeVirtMachineTemplate"
+}
+
+func controlPlaneLBServiceName(clusterName string) string {
+	return fmt.Sprintf("%s-%s", clusterName, controlPlaneLBServiceSuffix)
+}
+
 func isValidEndpointHost(host string) bool {
 	return host != "" && host != "0.0.0.0" && host != "::"
 }
@@ -1520,86 +1539,89 @@ func (r *KairosControlPlaneReconciler) updateClusterStatus(ctx context.Context, 
 	currentPort := clusterToPatch.Spec.ControlPlaneEndpoint.Port
 	log.V(4).Info("Checking controlPlaneEndpoint", "cluster", clusterToPatch.Name, "currentHost", currentHost, "currentPort", currentPort)
 
-	machines, err := r.getControlPlaneMachines(ctx, kcp, clusterToPatch)
-	if err != nil {
-		log.V(4).Info("Failed to get machines", "error", err)
-	} else if len(machines) == 0 {
-		log.V(4).Info("No machines found")
-	} else {
-		log.V(4).Info("Found machines", "count", len(machines))
-		isKubevirt := false
-		// Find the first machine with an IP address
-		// Try machine.Status.Addresses first, then fallback to VSphereMachine/VSphereVM
-		for _, machine := range machines {
-			log.V(4).Info("Checking machine", "machine", machine.Name, "addressCount", len(machine.Status.Addresses))
-			var controlPlaneAddress string
-			if isKubevirtMachine(machine) {
-				isKubevirt = true
-			}
-
-			// First, try machine.Status.Addresses (if populated)
-			if len(machine.Status.Addresses) > 0 {
-				var controlPlaneIP string
-				var controlPlaneHostname string
-				for _, addr := range machine.Status.Addresses {
-					log.V(4).Info("Machine address", "machine", machine.Name, "type", addr.Type, "address", addr.Address)
-					if addr.Type == clusterv1.MachineExternalIP || addr.Type == clusterv1.MachineInternalIP {
-						controlPlaneIP = addr.Address
-					}
-					if addr.Type == clusterv1.MachineInternalDNS {
-						controlPlaneHostname = addr.Address
-					}
-				}
-				// Prefer IP address, fallback to hostname
-				controlPlaneAddress = controlPlaneIP
-				if controlPlaneAddress == "" && controlPlaneHostname != "" {
-					controlPlaneAddress = controlPlaneHostname
-					log.V(4).Info("Using hostname from machine status", "hostname", controlPlaneHostname)
-				}
-			}
-
-			// Fallback: Get IP from infrastructure provider (same method used for kubeconfig)
-			if controlPlaneAddress == "" {
-				log.V(4).Info("Machine.Status.Addresses empty, trying infrastructure provider", "machine", machine.Name)
-				if ip, err := r.getNodeIP(ctx, log, machine); err == nil && ip != "" {
-					controlPlaneAddress = ip
-					log.V(4).Info("Found IP from infrastructure provider", "machine", machine.Name, "ip", ip)
-				} else if err != nil {
-					log.V(4).Info("Failed to get IP from infrastructure provider", "machine", machine.Name, "error", err)
-				}
-			}
-
-			if controlPlaneAddress != "" {
-				// For KubeVirt, prefer the VM/VMI IP even if a different endpoint is already set.
-				// This avoids stale service/pod IPs that are not reachable from the management plane.
-				shouldUpdate := currentHost == "" || currentPort == 0
-				if isKubevirt && currentHost != controlPlaneAddress {
-					shouldUpdate = true
-				}
-				if shouldUpdate {
-					clusterToPatch.Spec.ControlPlaneEndpoint.Host = controlPlaneAddress
-					clusterToPatch.Spec.ControlPlaneEndpoint.Port = 6443 // Default k0s API server port
-					needsSpecUpdate = true
-					log.Info("Setting controlPlaneEndpoint", "cluster", clusterToPatch.Name, "host", controlPlaneAddress, "port", 6443)
-					break
-				}
-				log.V(4).Info("controlPlaneEndpoint already set", "currentHost", currentHost, "currentPort", currentPort)
-			} else {
-				log.V(4).Info("No IP or hostname found for machine", "machine", machine.Name)
-			}
+	if isKubevirtControlPlane(kcp) {
+		lbHost, lbPort, err := r.getControlPlaneLBEndpoint(ctx, log, clusterToPatch)
+		if err != nil && !apierrors.IsNotFound(err) {
+			log.Error(err, "Failed to get control plane LoadBalancer endpoint", "cluster", clusterToPatch.Name)
 		}
+		if lbHost != "" && lbPort != 0 {
+			shouldUpdate := currentHost == "" || currentPort == 0 || currentHost != lbHost || currentPort != lbPort
+			if shouldUpdate {
+				clusterToPatch.Spec.ControlPlaneEndpoint.Host = lbHost
+				clusterToPatch.Spec.ControlPlaneEndpoint.Port = lbPort
+				needsSpecUpdate = true
+				log.Info("Setting controlPlaneEndpoint from LoadBalancer", "cluster", clusterToPatch.Name, "host", lbHost, "port", lbPort)
+			} else {
+				log.V(4).Info("controlPlaneEndpoint already set to LoadBalancer", "currentHost", currentHost, "currentPort", currentPort)
+			}
 
-		// Ensure kubeconfig server matches the chosen controlPlaneEndpoint for KubeVirt.
-		// This allows the Machine controller to reach the workload API server.
-		if isKubevirt {
-			desiredHost := clusterToPatch.Spec.ControlPlaneEndpoint.Host
-			desiredPort := clusterToPatch.Spec.ControlPlaneEndpoint.Port
-			if desiredHost != "" && desiredPort != 0 {
-				updated, err := r.ensureKubeconfigServer(ctx, log, secret, desiredHost, desiredPort)
-				if err != nil {
-					log.Error(err, "Failed to ensure kubeconfig server", "cluster", clusterToPatch.Name)
-				} else if updated {
-					log.Info("Updated kubeconfig server to match controlPlaneEndpoint", "cluster", clusterToPatch.Name, "host", desiredHost, "port", desiredPort)
+			updated, err := r.ensureKubeconfigServer(ctx, log, secret, lbHost, lbPort)
+			if err != nil {
+				log.Error(err, "Failed to ensure kubeconfig server", "cluster", clusterToPatch.Name)
+			} else if updated {
+				log.Info("Updated kubeconfig server to match LoadBalancer endpoint", "cluster", clusterToPatch.Name, "host", lbHost, "port", lbPort)
+			}
+		} else {
+			log.Info("LoadBalancer endpoint not ready yet", "cluster", clusterToPatch.Name)
+		}
+	} else {
+		machines, err := r.getControlPlaneMachines(ctx, kcp, clusterToPatch)
+		if err != nil {
+			log.V(4).Info("Failed to get machines", "error", err)
+		} else if len(machines) == 0 {
+			log.V(4).Info("No machines found")
+		} else {
+			log.V(4).Info("Found machines", "count", len(machines))
+			// Find the first machine with an IP address
+			// Try machine.Status.Addresses first, then fallback to VSphereMachine/VSphereVM
+			for _, machine := range machines {
+				log.V(4).Info("Checking machine", "machine", machine.Name, "addressCount", len(machine.Status.Addresses))
+				var controlPlaneAddress string
+
+				// First, try machine.Status.Addresses (if populated)
+				if len(machine.Status.Addresses) > 0 {
+					var controlPlaneIP string
+					var controlPlaneHostname string
+					for _, addr := range machine.Status.Addresses {
+						log.V(4).Info("Machine address", "machine", machine.Name, "type", addr.Type, "address", addr.Address)
+						if addr.Type == clusterv1.MachineExternalIP || addr.Type == clusterv1.MachineInternalIP {
+							controlPlaneIP = addr.Address
+						}
+						if addr.Type == clusterv1.MachineInternalDNS {
+							controlPlaneHostname = addr.Address
+						}
+					}
+					// Prefer IP address, fallback to hostname
+					controlPlaneAddress = controlPlaneIP
+					if controlPlaneAddress == "" && controlPlaneHostname != "" {
+						controlPlaneAddress = controlPlaneHostname
+						log.V(4).Info("Using hostname from machine status", "hostname", controlPlaneHostname)
+					}
+				}
+
+				// Fallback: Get IP from infrastructure provider (same method used for kubeconfig)
+				if controlPlaneAddress == "" {
+					log.V(4).Info("Machine.Status.Addresses empty, trying infrastructure provider", "machine", machine.Name)
+					if ip, err := r.getNodeIP(ctx, log, machine); err == nil && ip != "" {
+						controlPlaneAddress = ip
+						log.V(4).Info("Found IP from infrastructure provider", "machine", machine.Name, "ip", ip)
+					} else if err != nil {
+						log.V(4).Info("Failed to get IP from infrastructure provider", "machine", machine.Name, "error", err)
+					}
+				}
+
+				if controlPlaneAddress != "" {
+					shouldUpdate := currentHost == "" || currentPort == 0 || currentHost != controlPlaneAddress
+					if shouldUpdate {
+						clusterToPatch.Spec.ControlPlaneEndpoint.Host = controlPlaneAddress
+						clusterToPatch.Spec.ControlPlaneEndpoint.Port = 6443 // Default k0s API server port
+						needsSpecUpdate = true
+						log.Info("Setting controlPlaneEndpoint", "cluster", clusterToPatch.Name, "host", controlPlaneAddress, "port", 6443)
+						break
+					}
+					log.V(4).Info("controlPlaneEndpoint already set", "currentHost", currentHost, "currentPort", currentPort)
+				} else {
+					log.V(4).Info("No IP or hostname found for machine", "machine", machine.Name)
 				}
 			}
 		}
@@ -1638,6 +1660,146 @@ func (r *KairosControlPlaneReconciler) updateClusterStatus(ctx context.Context, 
 	return nil
 }
 
+func (r *KairosControlPlaneReconciler) reconcileControlPlaneLB(ctx context.Context, log logr.Logger, kcp *controlplanev1beta2.KairosControlPlane, cluster *clusterv1.Cluster) error {
+	if cluster == nil {
+		return nil
+	}
+
+	service, err := r.ensureControlPlaneLBService(ctx, log, kcp, cluster)
+	if err != nil {
+		return err
+	}
+
+	if err := r.ensureControlPlaneLBEndpoints(ctx, log, kcp, cluster, service.Name); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (r *KairosControlPlaneReconciler) ensureControlPlaneLBService(ctx context.Context, log logr.Logger, kcp *controlplanev1beta2.KairosControlPlane, cluster *clusterv1.Cluster) (*corev1.Service, error) {
+	serviceName := controlPlaneLBServiceName(cluster.Name)
+	service := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      serviceName,
+			Namespace: cluster.Namespace,
+		},
+	}
+
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, service, func() error {
+		if service.Labels == nil {
+			service.Labels = map[string]string{}
+		}
+		service.Labels[clusterv1.ClusterNameLabel] = cluster.Name
+
+		service.Spec.Type = corev1.ServiceTypeLoadBalancer
+		service.Spec.Selector = nil
+		service.Spec.Ports = []corev1.ServicePort{
+			{
+				Name:       "k8s-api",
+				Protocol:   corev1.ProtocolTCP,
+				Port:       6443,
+				TargetPort: intstr.FromInt(6443),
+			},
+		}
+
+		return controllerutil.SetControllerReference(kcp, service, r.Scheme)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to ensure control plane LoadBalancer service: %w", err)
+	}
+
+	return service, nil
+}
+
+func (r *KairosControlPlaneReconciler) ensureControlPlaneLBEndpoints(ctx context.Context, log logr.Logger, kcp *controlplanev1beta2.KairosControlPlane, cluster *clusterv1.Cluster, serviceName string) error {
+	endpoints := &corev1.Endpoints{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      serviceName,
+			Namespace: cluster.Namespace,
+		},
+	}
+
+	machines, err := r.getControlPlaneMachines(ctx, kcp, cluster)
+	if err != nil {
+		return fmt.Errorf("failed to list control plane machines: %w", err)
+	}
+
+	addresses := make([]corev1.EndpointAddress, 0, len(machines))
+	for _, machine := range machines {
+		if !isKubevirtMachine(machine) {
+			continue
+		}
+		ip, err := r.getKubevirtVMIIP(ctx, log, machine)
+		if err != nil || ip == "" {
+			log.V(4).Info("No VMI IP yet for control plane endpoint", "machine", machine.Name, "error", err)
+			continue
+		}
+		addresses = append(addresses, corev1.EndpointAddress{IP: ip})
+	}
+
+	subsets := []corev1.EndpointSubset{}
+	if len(addresses) > 0 {
+		subsets = []corev1.EndpointSubset{
+			{
+				Addresses: addresses,
+				Ports: []corev1.EndpointPort{
+					{
+						Name:     "k8s-api",
+						Port:     6443,
+						Protocol: corev1.ProtocolTCP,
+					},
+				},
+			},
+		}
+	}
+
+	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, endpoints, func() error {
+		if endpoints.Labels == nil {
+			endpoints.Labels = map[string]string{}
+		}
+		endpoints.Labels[clusterv1.ClusterNameLabel] = cluster.Name
+		endpoints.Subsets = subsets
+		return controllerutil.SetControllerReference(kcp, endpoints, r.Scheme)
+	})
+	if err != nil {
+		return fmt.Errorf("failed to ensure control plane endpoints: %w", err)
+	}
+
+	return nil
+}
+
+func (r *KairosControlPlaneReconciler) getControlPlaneLBEndpoint(ctx context.Context, log logr.Logger, cluster *clusterv1.Cluster) (string, int32, error) {
+	serviceName := controlPlaneLBServiceName(cluster.Name)
+	service := &corev1.Service{}
+	if err := r.Get(ctx, types.NamespacedName{Name: serviceName, Namespace: cluster.Namespace}, service); err != nil {
+		return "", 0, err
+	}
+
+	host := ""
+	if len(service.Status.LoadBalancer.Ingress) > 0 {
+		ingress := service.Status.LoadBalancer.Ingress[0]
+		if ingress.IP != "" {
+			host = ingress.IP
+		} else if ingress.Hostname != "" {
+			host = ingress.Hostname
+		}
+	}
+	if host == "" && len(service.Spec.ExternalIPs) > 0 {
+		host = service.Spec.ExternalIPs[0]
+	}
+
+	port := int32(6443)
+	for _, svcPort := range service.Spec.Ports {
+		if svcPort.Port != 0 {
+			port = svcPort.Port
+			break
+		}
+	}
+
+	return host, port, nil
+}
+
 // ensureKubeconfigServer updates the kubeconfig secret server to match the given endpoint.
 func (r *KairosControlPlaneReconciler) ensureKubeconfigServer(ctx context.Context, log logr.Logger, secret *corev1.Secret, host string, port int32) (bool, error) {
 	if host == "" || port == 0 {
@@ -1647,6 +1809,12 @@ func (r *KairosControlPlaneReconciler) ensureKubeconfigServer(ctx context.Contex
 	kubeconfig, ok := secret.Data["value"]
 	if !ok || len(kubeconfig) == 0 {
 		return false, nil
+	}
+
+	if updated, err := r.ensureKubeconfigSecretMetadata(ctx, secret, nil); err != nil {
+		return false, err
+	} else if updated {
+		log.Info("Updated kubeconfig secret metadata", "secret", secret.Name)
 	}
 
 	config, err := clientcmd.Load(kubeconfig)
@@ -1692,6 +1860,54 @@ func (r *KairosControlPlaneReconciler) ensureKubeconfigServer(ctx context.Contex
 		return false, fmt.Errorf("failed to update kubeconfig secret: %w", err)
 	}
 
+	return true, nil
+}
+
+func (r *KairosControlPlaneReconciler) ensureKubeconfigSecretMetadata(ctx context.Context, secret *corev1.Secret, cluster *clusterv1.Cluster) (bool, error) {
+	changed := false
+	secretCopy := secret.DeepCopy()
+
+	if secretCopy.Labels == nil {
+		secretCopy.Labels = map[string]string{}
+	}
+	if cluster != nil {
+		if secretCopy.Labels[clusterv1.ClusterNameLabel] != cluster.Name {
+			secretCopy.Labels[clusterv1.ClusterNameLabel] = cluster.Name
+			changed = true
+		}
+	}
+
+	if cluster != nil {
+		ownerRef := metav1.OwnerReference{
+			APIVersion: cluster.APIVersion,
+			Kind:       cluster.Kind,
+			Name:       cluster.Name,
+			UID:        cluster.UID,
+			Controller: func() *bool { b := true; return &b }(),
+		}
+		hasOwner := false
+		for _, ref := range secretCopy.OwnerReferences {
+			if ref.UID == ownerRef.UID {
+				hasOwner = true
+				break
+			}
+		}
+		if !hasOwner {
+			secretCopy.OwnerReferences = append(secretCopy.OwnerReferences, ownerRef)
+			changed = true
+		}
+	}
+
+	if !changed {
+		return false, nil
+	}
+	if secretCopy.ResourceVersion == "" {
+		*secret = *secretCopy
+		return true, nil
+	}
+	if err := r.Update(ctx, secretCopy); err != nil {
+		return false, fmt.Errorf("failed to update kubeconfig secret metadata: %w", err)
+	}
 	return true, nil
 }
 

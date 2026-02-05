@@ -31,24 +31,29 @@ var templateFS embed.FS
 
 // TemplateData holds data for rendering the Kairos cloud-config template
 type TemplateData struct {
-	Role           string
-	SingleNode     bool
-	Hostname       string
-	UserName       string
-	UserPassword   string
-	UserGroups     []string
-	GitHubUser     string
-	SSHPublicKey   string
-	WorkerToken    string
-	Manifests      []bootstrapv1beta2.Manifest
-	HostnamePrefix string
-	DNSServers     []string
-	PodCIDR        string
-	ServiceCIDR    string
-	PrimaryIP      string
-	IsKubeVirt     bool
-	Install        *InstallConfig
-	ProviderID     string // ProviderID for the Node (e.g., "vsphere://<vm-uuid>")
+	Role                           string
+	SingleNode                     bool
+	Hostname                       string
+	UserName                       string
+	UserPassword                   string
+	UserGroups                     []string
+	GitHubUser                     string
+	SSHPublicKey                   string
+	WorkerToken                    string
+	Manifests                      []bootstrapv1beta2.Manifest
+	HostnamePrefix                 string
+	DNSServers                     []string
+	PodCIDR                        string
+	ServiceCIDR                    string
+	PrimaryIP                      string
+	MachineName                    string
+	ClusterNS                      string
+	IsKubeVirt                     bool
+	Install                        *InstallConfig
+	ProviderID                     string // ProviderID for the Node (e.g., "vsphere://<vm-uuid>")
+	ControlPlaneLBServiceName      string
+	ControlPlaneLBServiceNamespace string
+	ControlPlaneLBEndpoint         string
 	// Management cluster push config for KubeVirt (non-SSH kubeconfig retrieval)
 	ManagementKubeconfigToken           string
 	ManagementKubeconfigSecretName      string
