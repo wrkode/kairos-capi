@@ -1161,13 +1161,27 @@ func (r *KairosConfigReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			handler.EnqueueRequestsFromMapFunc(r.machineToKairosConfig),
 		).
 		Watches(
-			vsphereMachine,
-			handler.EnqueueRequestsFromMapFunc(r.vsphereMachineToKairosConfig),
-		).
-		Watches(
 			kubevirtMachineAlpha1,
 			handler.EnqueueRequestsFromMapFunc(r.kubevirtMachineToKairosConfig),
 		)
+
+	if r.gvkExists(mgr, vsphereMachineGVK) {
+		builder = builder.Watches(
+			vsphereMachine,
+			handler.EnqueueRequestsFromMapFunc(r.vsphereMachineToKairosConfig),
+		)
+	} else {
+		log.V(2).Info("Skipping watch: VSphereMachine CRD not installed")
+	}
+
+	if r.gvkExists(mgr, kubevirtMachineGVKAlpha1) {
+		builder = builder.Watches(
+			kubevirtMachineAlpha1,
+			handler.EnqueueRequestsFromMapFunc(r.kubevirtMachineToKairosConfig),
+		)
+	} else {
+		log.V(2).Info("Skipping watch: KubevirtMachine v1alpha1 CRD not installed")
+	}
 
 	if r.gvkExists(mgr, kubevirtMachineGVKAlpha4) {
 		builder = builder.Watches(

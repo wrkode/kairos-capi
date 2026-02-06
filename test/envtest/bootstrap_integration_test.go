@@ -21,6 +21,9 @@ package envtest
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"os"
 	"testing"
 	"time"
 
@@ -29,11 +32,14 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"os"
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
+	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	bootstrapv1beta2 "github.com/kairos-io/kairos-capi/api/bootstrap/v1beta2"
 	"github.com/kairos-io/kairos-capi/internal/controllers/bootstrap"
@@ -43,6 +49,7 @@ func TestBootstrapIntegration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	log.SetLogger(zap.New(zap.UseDevMode(true)))
 	g := NewWithT(t)
 
 	// Setup envtest environment
@@ -52,12 +59,15 @@ func TestBootstrapIntegration(t *testing.T) {
 	// Add CAPI CRDs if available (downloaded by make test-envtest)
 	if _, err := os.Stat("../../test/crd/capi/cluster-api-components.yaml"); err == nil {
 		crdPaths = append(crdPaths, "../../test/crd/capi")
+	} else {
+		t.Fatalf("CAPI CRDs not found; run `make test-envtest` to download: %v", err)
 	}
 	testEnv := &envtest.Environment{
 		CRDDirectoryPaths:     crdPaths,
 		ErrorIfCRDPathMissing: false, // Allow missing CAPI CRDs for now
 	}
 
+	t.Logf("Starting envtest with CRD paths: %v", crdPaths)
 	cfg, err := testEnv.Start()
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(cfg).NotTo(BeNil())
@@ -75,6 +85,8 @@ func TestBootstrapIntegration(t *testing.T) {
 	mgr, err := manager.New(cfg, manager.Options{
 		Scheme: scheme,
 		Logger: log.Log,
+		// Disable webhook server for envtest
+		WebhookServer: webhook.NewServer(webhook.Options{Port: 0}),
 	})
 	g.Expect(err).NotTo(HaveOccurred())
 
@@ -94,9 +106,12 @@ func TestBootstrapIntegration(t *testing.T) {
 	}()
 
 	// Wait for manager to be ready
-	g.Eventually(func() bool {
-		return mgr.GetCache().WaitForCacheSync(ctx)
-	}, 10*time.Second).Should(BeTrue())
+	waitForCondition(t, 10*time.Second, 1*time.Second, func() (bool, string) {
+		if mgr.GetCache().WaitForCacheSync(ctx) {
+			return true, "cache synced"
+		}
+		return false, "cache sync not ready"
+	}, nil)
 
 	// Create test namespace
 	ns := &corev1.Namespace{
@@ -104,6 +119,7 @@ func TestBootstrapIntegration(t *testing.T) {
 			Name: "test-namespace",
 		},
 	}
+	t.Logf("Creating namespace %s", ns.Name)
 	g.Expect(mgr.GetClient().Create(ctx, ns)).To(Succeed())
 
 	// Create Cluster
@@ -120,6 +136,7 @@ func TestBootstrapIntegration(t *testing.T) {
 			},
 		},
 	}
+	t.Logf("Creating Cluster %s", cluster.Name)
 	g.Expect(mgr.GetClient().Create(ctx, cluster)).To(Succeed())
 
 	// Create Machine
@@ -143,7 +160,29 @@ func TestBootstrapIntegration(t *testing.T) {
 			},
 		},
 	}
+	t.Logf("Creating Machine %s", machine.Name)
 	g.Expect(mgr.GetClient().Create(ctx, machine)).To(Succeed())
+	apiReader := mgr.GetAPIReader()
+	waitForCondition(t, 10*time.Second, 1*time.Second, func() (bool, string) {
+		if err := apiReader.Get(ctx, types.NamespacedName{Name: machine.Name, Namespace: machine.Namespace}, machine); err != nil {
+			return false, fmt.Sprintf("get Machine: %v", err)
+		}
+		if machine.UID == "" {
+			return false, "machine UID not set yet"
+		}
+		return true, fmt.Sprintf("machine UID=%s", machine.UID)
+	}, func(last string) {
+		t.Logf("Timed out waiting for Machine UID: %s", last)
+		dumpBootstrapState(t, ctx, mgr.GetClient(), "test-namespace", "test-kairos-config")
+	})
+	waitForCondition(t, 10*time.Second, 1*time.Second, func() (bool, string) {
+		if err := mgr.GetClient().Get(ctx, types.NamespacedName{Name: machine.Name, Namespace: machine.Namespace}, &clusterv1.Machine{}); err != nil {
+			return false, fmt.Sprintf("cache get Machine: %v", err)
+		}
+		return true, "machine visible in cache"
+	}, func(last string) {
+		t.Logf("Timed out waiting for Machine in cache: %s", last)
+	})
 
 	// Create KairosConfig
 	kairosConfig := &bootstrapv1beta2.KairosConfig{
@@ -151,7 +190,13 @@ func TestBootstrapIntegration(t *testing.T) {
 			Name:      "test-kairos-config",
 			Namespace: "test-namespace",
 			OwnerReferences: []metav1.OwnerReference{
-				*metav1.NewControllerRef(machine, clusterv1.GroupVersion.WithKind("Machine")),
+				{
+					APIVersion: clusterv1.GroupVersion.String(),
+					Kind:       "Machine",
+					Name:       machine.Name,
+					UID:        machine.UID,
+					Controller: boolPtr(true),
+				},
 			},
 		},
 		Spec: bootstrapv1beta2.KairosConfigSpec{
@@ -164,44 +209,70 @@ func TestBootstrapIntegration(t *testing.T) {
 			UserGroups:        []string{"admin"},
 		},
 	}
+	t.Logf("Creating KairosConfig %s", kairosConfig.Name)
 	g.Expect(mgr.GetClient().Create(ctx, kairosConfig)).To(Succeed())
 
 	// Wait for bootstrap data to be generated
-	g.Eventually(func() bool {
+	waitForCondition(t, 30*time.Second, 1*time.Second, func() (bool, string) {
+		_, err := bootstrapReconciler.Reconcile(ctx, ctrl.Request{
+			NamespacedName: types.NamespacedName{
+				Name:      "test-kairos-config",
+				Namespace: "test-namespace",
+			},
+		})
+		if err != nil {
+			return false, fmt.Sprintf("reconcile error: %v", err)
+		}
 		config := &bootstrapv1beta2.KairosConfig{}
 		if err := mgr.GetClient().Get(ctx, types.NamespacedName{
 			Name:      "test-kairos-config",
 			Namespace: "test-namespace",
 		}, config); err != nil {
-			return false
+			return false, fmt.Sprintf("get KairosConfig: %v", err)
 		}
-		return config.Status.DataSecretName != nil && *config.Status.DataSecretName != ""
-	}, 30*time.Second, 1*time.Second).Should(BeTrue())
+		if config.Status.DataSecretName == nil || *config.Status.DataSecretName == "" {
+			return false, "dataSecretName not set"
+		}
+		return true, fmt.Sprintf("dataSecretName=%s", *config.Status.DataSecretName)
+	}, func(last string) {
+		t.Logf("Timed out waiting for bootstrap data: %s", last)
+		dumpBootstrapState(t, ctx, mgr.GetClient(), "test-namespace", "test-kairos-config")
+	})
 
 	// Verify Secret exists
 	var secretName string
-	g.Eventually(func() bool {
+	waitForCondition(t, 10*time.Second, 1*time.Second, func() (bool, string) {
 		config := &bootstrapv1beta2.KairosConfig{}
 		if err := mgr.GetClient().Get(ctx, types.NamespacedName{
 			Name:      "test-kairos-config",
 			Namespace: "test-namespace",
 		}, config); err != nil {
-			return false
+			return false, fmt.Sprintf("get KairosConfig: %v", err)
 		}
 		if config.Status.DataSecretName == nil {
-			return false
+			return false, "dataSecretName still nil"
 		}
 		secretName = *config.Status.DataSecretName
-		return true
-	}, 10*time.Second).Should(BeTrue())
+		return true, fmt.Sprintf("dataSecretName=%s", secretName)
+	}, func(last string) {
+		t.Logf("Timed out waiting for dataSecretName: %s", last)
+		dumpBootstrapState(t, ctx, mgr.GetClient(), "test-namespace", "test-kairos-config")
+	})
 
 	secret := &corev1.Secret{}
-	g.Eventually(func() bool {
-		return mgr.GetClient().Get(ctx, types.NamespacedName{
+	waitForCondition(t, 10*time.Second, 1*time.Second, func() (bool, string) {
+		err := mgr.GetClient().Get(ctx, types.NamespacedName{
 			Name:      secretName,
 			Namespace: "test-namespace",
-		}, secret) == nil
-	}, 10*time.Second).Should(BeTrue())
+		}, secret)
+		if err != nil {
+			return false, fmt.Sprintf("get Secret %s: %v", secretName, err)
+		}
+		return true, "secret found"
+	}, func(last string) {
+		t.Logf("Timed out waiting for Secret: %s", last)
+		dumpBootstrapState(t, ctx, mgr.GetClient(), "test-namespace", "test-kairos-config")
+	})
 
 	// Verify Secret contains cloud-config with k0s configuration
 	g.Expect(secret.Data).To(HaveKey("value"))
@@ -210,4 +281,40 @@ func TestBootstrapIntegration(t *testing.T) {
 	g.Expect(cloudConfig).To(ContainSubstring("k0s:"))
 	g.Expect(cloudConfig).To(ContainSubstring("enabled: true"))
 	g.Expect(cloudConfig).To(ContainSubstring("--single"))
+}
+
+func dumpBootstrapState(t *testing.T, ctx context.Context, c client.Client, namespace, configName string) {
+	t.Helper()
+	config := &bootstrapv1beta2.KairosConfig{}
+	if err := c.Get(ctx, types.NamespacedName{Name: configName, Namespace: namespace}, config); err == nil {
+		if b, err := json.MarshalIndent(config, "", "  "); err == nil {
+			t.Logf("KairosConfig:\n%s", string(b))
+		}
+	} else {
+		t.Logf("Failed to get KairosConfig: %v", err)
+	}
+
+	secretList := &corev1.SecretList{}
+	if err := c.List(ctx, secretList, client.InNamespace(namespace)); err == nil {
+		names := make([]string, 0, len(secretList.Items))
+		for _, s := range secretList.Items {
+			names = append(names, s.Name)
+		}
+		t.Logf("Secrets in %s: %v", namespace, names)
+	} else {
+		t.Logf("Failed to list Secrets: %v", err)
+	}
+
+	eventList := &corev1.EventList{}
+	if err := c.List(ctx, eventList, client.InNamespace(namespace)); err == nil {
+		for _, evt := range eventList.Items {
+			t.Logf("Event %s: %s %s %s", evt.Name, evt.Reason, evt.Type, evt.Message)
+		}
+	} else {
+		t.Logf("Failed to list Events: %v", err)
+	}
+}
+
+func boolPtr(v bool) *bool {
+	return &v
 }

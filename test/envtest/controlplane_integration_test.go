@@ -21,6 +21,9 @@ package envtest
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"os"
 	"testing"
 	"time"
 
@@ -29,11 +32,12 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"os"
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
+	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	bootstrapv1beta2 "github.com/kairos-io/kairos-capi/api/bootstrap/v1beta2"
 	controlplanev1beta2 "github.com/kairos-io/kairos-capi/api/controlplane/v1beta2"
@@ -58,12 +62,15 @@ func TestControlPlaneIntegration(t *testing.T) {
 	// Add CAPI CRDs if available (downloaded by make test-envtest)
 	if _, err := os.Stat("../../test/crd/capi/cluster-api-components.yaml"); err == nil {
 		crdPaths = append(crdPaths, "../../test/crd/capi")
+	} else {
+		t.Fatalf("CAPI CRDs not found; run `make test-envtest` to download: %v", err)
 	}
 	testEnv := &envtest.Environment{
 		CRDDirectoryPaths:     crdPaths,
 		ErrorIfCRDPathMissing: false,
 	}
 
+	t.Logf("Starting envtest with CRD paths: %v", crdPaths)
 	cfg, err := testEnv.Start()
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(cfg).NotTo(BeNil())
@@ -82,6 +89,8 @@ func TestControlPlaneIntegration(t *testing.T) {
 	mgr, err := manager.New(cfg, manager.Options{
 		Scheme: scheme,
 		Logger: log.Log,
+		// Disable webhook server for envtest
+		WebhookServer: webhook.NewServer(webhook.Options{Port: 0}),
 	})
 	g.Expect(err).NotTo(HaveOccurred())
 
@@ -107,9 +116,12 @@ func TestControlPlaneIntegration(t *testing.T) {
 	}()
 
 	// Wait for manager to be ready
-	g.Eventually(func() bool {
-		return mgr.GetCache().WaitForCacheSync(ctx)
-	}, 10*time.Second).Should(BeTrue())
+	waitForCondition(t, 10*time.Second, 1*time.Second, func() (bool, string) {
+		if mgr.GetCache().WaitForCacheSync(ctx) {
+			return true, "cache synced"
+		}
+		return false, "cache sync not ready"
+	}, nil)
 
 	// Create test namespace
 	ns := &corev1.Namespace{
@@ -117,6 +129,7 @@ func TestControlPlaneIntegration(t *testing.T) {
 			Name: "test-namespace",
 		},
 	}
+	t.Logf("Creating namespace %s", ns.Name)
 	g.Expect(mgr.GetClient().Create(ctx, ns)).To(Succeed())
 
 	// Create Cluster
@@ -139,6 +152,7 @@ func TestControlPlaneIntegration(t *testing.T) {
 			},
 		},
 	}
+	t.Logf("Creating Cluster %s", cluster.Name)
 	g.Expect(mgr.GetClient().Create(ctx, cluster)).To(Succeed())
 
 	// Create KairosConfigTemplate
@@ -160,6 +174,7 @@ func TestControlPlaneIntegration(t *testing.T) {
 			},
 		},
 	}
+	t.Logf("Creating KairosConfigTemplate %s", configTemplate.Name)
 	g.Expect(mgr.GetClient().Create(ctx, configTemplate)).To(Succeed())
 
 	// Note: We skip creating infrastructure template because DockerMachineTemplate CRD is not available
@@ -189,6 +204,7 @@ func TestControlPlaneIntegration(t *testing.T) {
 			},
 		},
 	}
+	t.Logf("Creating KairosControlPlane %s", kcp.Name)
 	g.Expect(mgr.GetClient().Create(ctx, kcp)).To(Succeed())
 
 	// Verify that the controller attempts to reconcile the KairosControlPlane
@@ -197,12 +213,19 @@ func TestControlPlaneIntegration(t *testing.T) {
 	// that the KCP resource exists and the controller is watching it.
 	// Full end-to-end testing requires infrastructure provider CRDs (e.g., CAPD).
 	updatedKCP := &controlplanev1beta2.KairosControlPlane{}
-	g.Eventually(func() bool {
-		return mgr.GetClient().Get(ctx, types.NamespacedName{
+	waitForCondition(t, 10*time.Second, 1*time.Second, func() (bool, string) {
+		err := mgr.GetClient().Get(ctx, types.NamespacedName{
 			Name:      "test-kcp",
 			Namespace: "test-namespace",
-		}, updatedKCP) == nil
-	}, 5*time.Second).Should(BeTrue())
+		}, updatedKCP)
+		if err != nil {
+			return false, fmt.Sprintf("get KairosControlPlane: %v", err)
+		}
+		return true, "KairosControlPlane found"
+	}, func(last string) {
+		t.Logf("Timed out waiting for KairosControlPlane: %s", last)
+		dumpControlPlaneState(t, ctx, mgr.GetClient(), "test-namespace", "test-kcp")
+	})
 
 	// Verify spec is correct
 	g.Expect(updatedKCP.Spec.Replicas).NotTo(BeNil())
@@ -212,4 +235,25 @@ func TestControlPlaneIntegration(t *testing.T) {
 	// Note: Full Machine and KairosConfig creation testing requires infrastructure provider CRDs.
 	// The unit tests (TestCreateControlPlaneMachine_SingleNode) verify the SingleNode logic
 	// with mocked infrastructure. For full integration testing, use a real infrastructure provider.
+}
+
+func dumpControlPlaneState(t *testing.T, ctx context.Context, c client.Client, namespace, kcpName string) {
+	t.Helper()
+	kcp := &controlplanev1beta2.KairosControlPlane{}
+	if err := c.Get(ctx, types.NamespacedName{Name: kcpName, Namespace: namespace}, kcp); err == nil {
+		if b, err := json.MarshalIndent(kcp, "", "  "); err == nil {
+			t.Logf("KairosControlPlane:\n%s", string(b))
+		}
+	} else {
+		t.Logf("Failed to get KairosControlPlane: %v", err)
+	}
+
+	eventList := &corev1.EventList{}
+	if err := c.List(ctx, eventList, client.InNamespace(namespace)); err == nil {
+		for _, evt := range eventList.Items {
+			t.Logf("Event %s: %s %s %s", evt.Name, evt.Reason, evt.Type, evt.Message)
+		}
+	} else {
+		t.Logf("Failed to list Events: %v", err)
+	}
 }
