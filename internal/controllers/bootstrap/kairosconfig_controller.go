@@ -116,23 +116,31 @@ func (r *KairosConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	// Find the owning Machine
 	machine, err := util.GetOwnerMachine(ctx, r.Client, kairosConfig.ObjectMeta)
 	if err != nil {
+		if apierrors.IsNotFound(err) {
+			log.Info("Owner Machine not found yet, requeuing", "kairosConfig", kairosConfig.Name)
+			return ctrl.Result{RequeueAfter: 2 * time.Second}, nil
+		}
 		log.Error(err, "Failed to get owner machine")
 		return ctrl.Result{}, err
 	}
 	if machine == nil {
-		log.Info("Machine Controller has not yet set OwnerRef")
-		return ctrl.Result{}, nil
+		log.Info("Machine Controller has not yet set OwnerRef, requeuing", "kairosConfig", kairosConfig.Name)
+		return ctrl.Result{RequeueAfter: 2 * time.Second}, nil
 	}
 
 	// Find the owning Cluster
 	cluster, err := util.GetClusterFromMetadata(ctx, r.Client, machine.ObjectMeta)
 	if err != nil {
+		if apierrors.IsNotFound(err) || strings.Contains(err.Error(), "no \"cluster.x-k8s.io/cluster-name\" label present") {
+			log.Info("Cluster metadata not ready yet, requeuing", "machine", machine.Name)
+			return ctrl.Result{RequeueAfter: 2 * time.Second}, nil
+		}
 		log.Error(err, "Failed to get cluster from machine metadata")
 		return ctrl.Result{}, err
 	}
 	if cluster == nil {
-		log.Info("Cluster is not available yet")
-		return ctrl.Result{}, nil
+		log.Info("Cluster is not available yet, requeuing", "machine", machine.Name)
+		return ctrl.Result{RequeueAfter: 2 * time.Second}, nil
 	}
 
 	// Initialize patch helper
@@ -1159,10 +1167,6 @@ func (r *KairosConfigReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(
 			&clusterv1.Machine{},
 			handler.EnqueueRequestsFromMapFunc(r.machineToKairosConfig),
-		).
-		Watches(
-			kubevirtMachineAlpha1,
-			handler.EnqueueRequestsFromMapFunc(r.kubevirtMachineToKairosConfig),
 		)
 
 	if r.gvkExists(mgr, vsphereMachineGVK) {

@@ -15,7 +15,7 @@ make test-envtest
 ```
 
 This target:
-- Installs `setup-envtest` if needed
+- Installs `setup-envtest` if needed (see Makefile version pin)
 - Downloads envtest assets for Kubernetes `1.30.3`
 - Sets `KUBEBUILDER_ASSETS` and runs `go test ./... -tags=envtest`
 
@@ -27,3 +27,5 @@ make envtest-assets
 ## Notes
 - Envtest assets are cached by `setup-envtest` under your Go tools cache.
 - If you change Kubernetes version, update `ENVTEST_K8S_VERSION` in the Makefile.
+- If you need a different setup-envtest version, update `SETUP_ENVTEST_VERSION` in the Makefile.
+- Note: Using `latest` may trigger a newer Go toolchain download depending on upstream module requirements.

@@ -62,3 +62,7 @@ Unchanged:
 - Scale-down safety.
 - New infrastructure providers.
 - Automated LB/VIP provisioning.
+
+## Validation scope
+- HA has been validated on CAPV first.
+- CAPK HA is considered experimental until a dedicated acceptance run is completed.

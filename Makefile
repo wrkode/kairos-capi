@@ -80,7 +80,7 @@ test-unit: ## Run unit tests only.
 .PHONY: test-envtest
 test-envtest: ## Run envtest-based integration tests.
 	@echo "Installing/updating setup-envtest..."
-	@go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
+	@go install sigs.k8s.io/controller-runtime/tools/setup-envtest@$(SETUP_ENVTEST_VERSION)
 	@echo "Downloading CAPI CRDs..."
 	@mkdir -p test/crd/capi
 	@curl -L https://github.com/kubernetes-sigs/cluster-api/releases/download/v1.8.0/cluster-api-components.yaml -o test/crd/capi/cluster-api-components.yaml || \
@@ -94,7 +94,7 @@ test-envtest: ## Run envtest-based integration tests.
 .PHONY: envtest-assets
 envtest-assets: ## Download envtest assets and print path.
 	@echo "Installing/updating setup-envtest..."
-	@go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
+	@go install sigs.k8s.io/controller-runtime/tools/setup-envtest@$(SETUP_ENVTEST_VERSION)
 	@export PATH=$$(go env GOPATH)/bin:$$PATH && \
 	ASSETS_PATH=$$(setup-envtest use -p path $(ENVTEST_K8S_VERSION)) && \
 	echo "$$ASSETS_PATH"
@@ -185,6 +185,7 @@ GOLANGCI_LINT ?= $(LOCALBIN)/golangci-lint
 ## Tool Versions
 CONTROLLER_TOOLS_VERSION ?= v0.17.0
 GOLANGCI_LINT_VERSION ?= v1.60.0
+SETUP_ENVTEST_VERSION ?= latest
 ENVTEST_K8S_VERSION ?= 1.30.3
 
 .PHONY: controller-gen
