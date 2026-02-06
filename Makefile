@@ -87,8 +87,17 @@ test-envtest: ## Run envtest-based integration tests.
 		(echo "Warning: Failed to download CAPI CRDs. Tests may fail." && rm -f test/crd/capi/cluster-api-components.yaml)
 	@echo "Setting up kubebuilder tools..."
 	@export PATH=$$(go env GOPATH)/bin:$$PATH && \
-	eval $$(setup-envtest use -p env latest) && \
-	go test ./test/envtest/... -v -timeout 120s
+	ASSETS_PATH=$$(setup-envtest use -p path $(ENVTEST_K8S_VERSION)) && \
+	echo "Using KUBEBUILDER_ASSETS=$$ASSETS_PATH" && \
+	KUBEBUILDER_ASSETS="$$ASSETS_PATH" go test ./... -tags=envtest -v -timeout 120s
+
+.PHONY: envtest-assets
+envtest-assets: ## Download envtest assets and print path.
+	@echo "Installing/updating setup-envtest..."
+	@go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
+	@export PATH=$$(go env GOPATH)/bin:$$PATH && \
+	ASSETS_PATH=$$(setup-envtest use -p path $(ENVTEST_K8S_VERSION)) && \
+	echo "$$ASSETS_PATH"
 
 .PHONY: test-kubevirt
 test-kubevirt: ## Run local KubeVirt e2e flow (requires kind and KubeVirt).
@@ -176,6 +185,7 @@ GOLANGCI_LINT ?= $(LOCALBIN)/golangci-lint
 ## Tool Versions
 CONTROLLER_TOOLS_VERSION ?= v0.17.0
 GOLANGCI_LINT_VERSION ?= v1.60.0
+ENVTEST_K8S_VERSION ?= 1.30.3
 
 .PHONY: controller-gen
 controller-gen: $(CONTROLLER_GEN) ## Download controller-gen locally if necessary.

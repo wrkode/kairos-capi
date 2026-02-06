@@ -127,7 +127,6 @@ jobs:
       run: |
         go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
         export PATH=$(go env GOPATH)/bin:$PATH
-        setup-envtest use -p path latest
 
     - name: Cache Go modules
       uses: actions/cache@v4
@@ -144,8 +143,6 @@ jobs:
 
     - name: Run envtest integration tests
       run: make test-envtest
-      env:
-        KUBEBUILDER_ASSETS: $(setup-envtest use -p path latest)
 
   build:
     runs-on: ubuntu-latest
