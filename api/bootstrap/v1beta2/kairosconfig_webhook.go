@@ -123,6 +123,17 @@ func (r *KairosConfig) validate() error {
 		}
 	}
 
+	// Validate control-plane join token requirement
+	if r.Spec.Role == "control-plane" && r.Spec.ControlPlaneMode == ControlPlaneModeJoin {
+		hasJoinTokenRef := r.Spec.ControlPlaneJoinTokenSecretRef != nil && r.Spec.ControlPlaneJoinTokenSecretRef.Name != ""
+		if !hasJoinTokenRef {
+			allErrs = append(allErrs, field.Required(
+				field.NewPath("spec", "controlPlaneJoinTokenSecretRef"),
+				"control-plane join requires spec.controlPlaneJoinTokenSecretRef to be set",
+			))
+		}
+	}
+
 	if len(allErrs) > 0 {
 		return errors.NewInvalid(
 			schema.GroupKind{Group: GroupVersion.Group, Kind: "KairosConfig"},

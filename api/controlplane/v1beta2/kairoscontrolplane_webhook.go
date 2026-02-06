@@ -87,6 +87,16 @@ func (r *KairosControlPlane) validate() error {
 		))
 	}
 
+	// Require control-plane join token for HA
+	if r.Spec.Replicas != nil && *r.Spec.Replicas > 1 {
+		if r.Spec.ControlPlaneJoinTokenSecretRef == nil || r.Spec.ControlPlaneJoinTokenSecretRef.Name == "" {
+			allErrs = append(allErrs, field.Required(
+				field.NewPath("spec", "controlPlaneJoinTokenSecretRef"),
+				"spec.controlPlaneJoinTokenSecretRef is required when replicas > 1",
+			))
+		}
+	}
+
 	if len(allErrs) > 0 {
 		return errors.NewInvalid(
 			schema.GroupKind{Group: GroupVersion.Group, Kind: "KairosControlPlane"},

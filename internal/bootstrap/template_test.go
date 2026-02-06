@@ -107,6 +107,36 @@ func TestRenderK0sCloudConfig_ControlPlaneMultiNode(t *testing.T) {
 	}
 }
 
+func TestRenderK0sCloudConfig_ControlPlaneJoin(t *testing.T) {
+	data := TemplateData{
+		Role:                  "control-plane",
+		ControlPlaneMode:      bootstrapv1beta2.ControlPlaneModeJoin,
+		SingleNode:            false,
+		UserName:              "kairos",
+		UserPassword:          "kairos",
+		UserGroups:            []string{"admin"},
+		ControlPlaneJoinToken: "join-token-123",
+	}
+
+	result, err := RenderK0sCloudConfig(data)
+	if err != nil {
+		t.Fatalf("Failed to render template: %v", err)
+	}
+
+	if strings.Contains(result, "--single") {
+		t.Error("Should not have --single arg for join control-plane mode")
+	}
+	if !strings.Contains(result, "--token-file /etc/k0s/controller-token") {
+		t.Error("Missing control-plane join token-file arg")
+	}
+	if !strings.Contains(result, "path: /etc/k0s/controller-token") {
+		t.Error("Missing control-plane join token write_files entry")
+	}
+	if !strings.Contains(result, "join-token-123") {
+		t.Error("Missing control-plane join token content")
+	}
+}
+
 func TestRenderK0sCloudConfig_Worker(t *testing.T) {
 	data := TemplateData{
 		Role:           "worker",

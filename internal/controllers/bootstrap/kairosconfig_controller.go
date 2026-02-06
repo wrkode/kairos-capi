@@ -710,6 +710,12 @@ func (r *KairosConfigReconciler) generateK0sCloudConfig(ctx context.Context, log
 		}
 	}
 
+	// Determine control-plane mode (default to init)
+	controlPlaneMode := kairosConfig.Spec.ControlPlaneMode
+	if role == "control-plane" && controlPlaneMode == "" {
+		controlPlaneMode = bootstrapv1beta2.ControlPlaneModeInit
+	}
+
 	// Get worker token if needed (for worker nodes)
 	// Precedence: WorkerTokenSecretRef > WorkerToken > TokenSecretRef > Token
 	// TODO: Add validating webhook to enforce worker token requirement at API level
@@ -771,6 +777,34 @@ func (r *KairosConfigReconciler) generateK0sCloudConfig(ctx context.Context, log
 		// Validate worker token is present
 		if workerToken == "" {
 			return "", fmt.Errorf("worker token is required for worker nodes: either WorkerTokenSecretRef, WorkerToken, TokenSecretRef, or Token must be set")
+		}
+	}
+
+	// Get control-plane join token if needed (for control-plane join nodes)
+	var controlPlaneJoinToken string
+	if role == "control-plane" && controlPlaneMode == bootstrapv1beta2.ControlPlaneModeJoin && !singleNode {
+		if kairosConfig.Spec.ControlPlaneJoinTokenSecretRef == nil || kairosConfig.Spec.ControlPlaneJoinTokenSecretRef.Name == "" {
+			return "", fmt.Errorf("control-plane join requires ControlPlaneJoinTokenSecretRef to be set")
+		}
+		secretKey := types.NamespacedName{
+			Namespace: kairosConfig.Namespace,
+			Name:      kairosConfig.Spec.ControlPlaneJoinTokenSecretRef.Name,
+		}
+		if kairosConfig.Spec.ControlPlaneJoinTokenSecretRef.Namespace != "" {
+			secretKey.Namespace = kairosConfig.Spec.ControlPlaneJoinTokenSecretRef.Namespace
+		}
+		secret := &corev1.Secret{}
+		if err := r.Get(ctx, secretKey, secret); err != nil {
+			return "", fmt.Errorf("failed to get control-plane join token secret %s/%s: %w", secretKey.Namespace, secretKey.Name, err)
+		}
+		key := kairosConfig.Spec.ControlPlaneJoinTokenSecretRef.Key
+		if key == "" {
+			key = "token"
+		}
+		if tokenData, ok := secret.Data[key]; ok {
+			controlPlaneJoinToken = string(tokenData)
+		} else {
+			return "", fmt.Errorf("control-plane join token secret %s/%s does not contain key '%s'", secretKey.Namespace, secretKey.Name, key)
 		}
 	}
 
@@ -841,6 +875,7 @@ func (r *KairosConfigReconciler) generateK0sCloudConfig(ctx context.Context, log
 	// Build template data
 	templateData := bootstrap.TemplateData{
 		Role:                                role,
+		ControlPlaneMode:                    controlPlaneMode,
 		SingleNode:                          singleNode,
 		Hostname:                            hostname,
 		UserName:                            userName,
@@ -849,6 +884,7 @@ func (r *KairosConfigReconciler) generateK0sCloudConfig(ctx context.Context, log
 		GitHubUser:                          kairosConfig.Spec.GitHubUser,
 		SSHPublicKey:                        kairosConfig.Spec.SSHPublicKey,
 		WorkerToken:                         workerToken,
+		ControlPlaneJoinToken:               controlPlaneJoinToken,
 		Manifests:                           kairosConfig.Spec.Manifests,
 		HostnamePrefix:                      hostnamePrefix,
 		DNSServers:                          kairosConfig.Spec.DNSServers,

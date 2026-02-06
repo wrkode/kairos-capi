@@ -28,6 +28,15 @@ const (
 	KairosConfigFinalizer = "kairosconfig.bootstrap.cluster.x-k8s.io"
 )
 
+// ControlPlaneMode indicates whether a control-plane node initializes or joins.
+// +kubebuilder:validation:Enum=init;join
+type ControlPlaneMode string
+
+const (
+	ControlPlaneModeInit ControlPlaneMode = "init"
+	ControlPlaneModeJoin ControlPlaneMode = "join"
+)
+
 // KairosConfigSpec defines the desired state of KairosConfig
 type KairosConfigSpec struct {
 	// Role indicates whether this is a control-plane or worker node
@@ -125,6 +134,16 @@ type KairosConfigSpec struct {
 	// +optional
 	WorkerTokenSecretRef *WorkerTokenSecretReference `json:"workerTokenSecretRef,omitempty"`
 
+	// ControlPlaneMode indicates whether this control-plane node should init or join.
+	// For single-node control planes, init is implied and join is not used.
+	// +optional
+	ControlPlaneMode ControlPlaneMode `json:"controlPlaneMode,omitempty"`
+
+	// ControlPlaneJoinTokenSecretRef is a reference to a Secret containing the control-plane join token.
+	// The Secret must contain a key specified by ControlPlaneJoinTokenSecretRef.Key (defaults to "token").
+	// +optional
+	ControlPlaneJoinTokenSecretRef *ControlPlaneTokenSecretReference `json:"controlPlaneJoinTokenSecretRef,omitempty"`
+
 	// Manifests are Kubernetes manifests to be placed in /var/lib/k0s/manifests/
 	// These will be automatically applied by k0s at cluster startup.
 	// Each manifest is placed at /var/lib/k0s/manifests/{Name}/{File}
@@ -194,6 +213,24 @@ type InstallConfig struct {
 
 // WorkerTokenSecretReference is a reference to a Secret containing a worker join token
 type WorkerTokenSecretReference struct {
+	// Name is the name of the Secret
+	// +kubebuilder:validation:Required
+	Name string `json:"name"`
+
+	// Key is the key within the Secret that contains the token
+	// Defaults to "token" if not specified
+	// +kubebuilder:default=token
+	// +optional
+	Key string `json:"key,omitempty"`
+
+	// Namespace is the namespace of the Secret
+	// If not specified, defaults to the same namespace as the KairosConfig
+	// +optional
+	Namespace string `json:"namespace,omitempty"`
+}
+
+// ControlPlaneTokenSecretReference is a reference to a Secret containing a control-plane join token
+type ControlPlaneTokenSecretReference struct {
 	// Name is the name of the Secret
 	// +kubebuilder:validation:Required
 	Name string `json:"name"`

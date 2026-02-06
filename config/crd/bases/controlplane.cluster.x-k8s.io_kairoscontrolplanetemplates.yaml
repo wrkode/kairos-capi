@@ -59,6 +59,28 @@ spec:
                   spec:
                     description: Spec is the specification of the KairosControlPlane
                     properties:
+                      controlPlaneJoinTokenSecretRef:
+                        description: |-
+                          ControlPlaneJoinTokenSecretRef is a reference to a Secret containing the control-plane join token.
+                          The Secret must contain a key specified by ControlPlaneJoinTokenSecretRef.Key (defaults to "token").
+                        properties:
+                          key:
+                            default: token
+                            description: |-
+                              Key is the key within the Secret that contains the token
+                              Defaults to "token" if not specified
+                            type: string
+                          name:
+                            description: Name is the name of the Secret
+                            type: string
+                          namespace:
+                            description: |-
+                              Namespace is the namespace of the Secret
+                              If not specified, defaults to the same namespace as the KairosControlPlane
+                            type: string
+                        required:
+                        - name
+                        type: object
                       kairosConfigTemplate:
                         description: |-
                           KairosConfigTemplate is a reference to a KairosConfigTemplate resource

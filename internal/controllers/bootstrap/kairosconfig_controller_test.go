@@ -185,6 +185,81 @@ func TestGenerateK0sCloudConfig_ControlPlaneWithCIDRs(t *testing.T) {
 	g.Expect(cloudConfig).To(ContainSubstring("serviceCIDR: 10.96.0.0/12"))
 }
 
+func TestGenerateK0sCloudConfig_ControlPlaneJoin(t *testing.T) {
+	g := NewWithT(t)
+
+	scheme := runtime.NewScheme()
+	g.Expect(bootstrapv1beta2.AddToScheme(scheme)).To(Succeed())
+	g.Expect(clusterv1.AddToScheme(scheme)).To(Succeed())
+	g.Expect(corev1.AddToScheme(scheme)).To(Succeed())
+
+	joinSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "cp-join-token",
+			Namespace: "default",
+		},
+		Data: map[string][]byte{
+			"token": []byte("join-token-123"),
+		},
+	}
+
+	client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(joinSecret).Build()
+	reconciler := &KairosConfigReconciler{
+		Client: client,
+		Scheme: scheme,
+	}
+
+	kairosConfig := &bootstrapv1beta2.KairosConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-config",
+			Namespace: "default",
+		},
+		Spec: bootstrapv1beta2.KairosConfigSpec{
+			Role:              "control-plane",
+			Distribution:      "k0s",
+			KubernetesVersion: "v1.30.0+k0s.0",
+			SingleNode:        false,
+			ControlPlaneMode:  bootstrapv1beta2.ControlPlaneModeJoin,
+			ControlPlaneJoinTokenSecretRef: &bootstrapv1beta2.ControlPlaneTokenSecretReference{
+				Name: "cp-join-token",
+			},
+			UserName:     "kairos",
+			UserPassword: "kairos",
+			UserGroups:   []string{"admin"},
+		},
+	}
+
+	machine := &clusterv1.Machine{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-machine",
+			Namespace: "default",
+		},
+	}
+
+	cluster := &clusterv1.Cluster{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-cluster",
+			Namespace: "default",
+		},
+	}
+
+	cloudConfig, err := reconciler.generateK0sCloudConfig(
+		context.Background(),
+		log.Log,
+		kairosConfig,
+		machine,
+		cluster,
+		"control-plane",
+		"",
+	)
+
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(cloudConfig).To(ContainSubstring("--token-file /etc/k0s/controller-token"))
+	g.Expect(cloudConfig).To(ContainSubstring("path: /etc/k0s/controller-token"))
+	g.Expect(cloudConfig).To(ContainSubstring("join-token-123"))
+	g.Expect(cloudConfig).NotTo(ContainSubstring("--single"))
+}
+
 func TestGenerateK0sCloudConfig_ControlPlaneKubeVirtBootstrapTrap(t *testing.T) {
 	g := NewWithT(t)
 

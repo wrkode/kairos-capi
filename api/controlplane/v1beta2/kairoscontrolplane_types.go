@@ -51,6 +51,11 @@ type KairosControlPlaneSpec struct {
 	// Contract: ControlPlane MUST reference a BootstrapConfigTemplate
 	KairosConfigTemplate KairosConfigTemplateReference `json:"kairosConfigTemplate"`
 
+	// ControlPlaneJoinTokenSecretRef is a reference to a Secret containing the control-plane join token.
+	// The Secret must contain a key specified by ControlPlaneJoinTokenSecretRef.Key (defaults to "token").
+	// +optional
+	ControlPlaneJoinTokenSecretRef *ControlPlaneTokenSecretReference `json:"controlPlaneJoinTokenSecretRef,omitempty"`
+
 	// RolloutStrategy defines the strategy for rolling out updates
 	// +optional
 	RolloutStrategy *RolloutStrategy `json:"rolloutStrategy,omitempty"`
@@ -85,6 +90,24 @@ type KairosConfigTemplateReference struct {
 	// Name is the name of the referenced resource
 	// +kubebuilder:validation:Required
 	Name string `json:"name"`
+}
+
+// ControlPlaneTokenSecretReference is a reference to a Secret containing a control-plane join token
+type ControlPlaneTokenSecretReference struct {
+	// Name is the name of the Secret
+	// +kubebuilder:validation:Required
+	Name string `json:"name"`
+
+	// Key is the key within the Secret that contains the token
+	// Defaults to "token" if not specified
+	// +kubebuilder:default=token
+	// +optional
+	Key string `json:"key,omitempty"`
+
+	// Namespace is the namespace of the Secret
+	// If not specified, defaults to the same namespace as the KairosControlPlane
+	// +optional
+	Namespace string `json:"namespace,omitempty"`
 }
 
 // RolloutStrategy defines the strategy for rolling out updates

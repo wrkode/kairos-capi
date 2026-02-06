@@ -152,6 +152,9 @@ func TestCreateControlPlaneMachine_MultiNode(t *testing.T) {
 		Spec: controlplanev1beta2.KairosControlPlaneSpec{
 			Replicas: &replicas,
 			Version:  "v1.30.0+k0s.0",
+			ControlPlaneJoinTokenSecretRef: &controlplanev1beta2.ControlPlaneTokenSecretReference{
+				Name: "cp-join-token",
+			},
 			MachineTemplate: controlplanev1beta2.KairosControlPlaneMachineTemplate{
 				InfrastructureRef: corev1.ObjectReference{
 					APIVersion: "infrastructure.cluster.x-k8s.io/v1beta1",
@@ -230,6 +233,123 @@ func TestCreateControlPlaneMachine_MultiNode(t *testing.T) {
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(kairosConfig.Spec.SingleNode).To(BeFalse())
 	g.Expect(kairosConfig.Spec.Role).To(Equal("control-plane"))
+	g.Expect(kairosConfig.Spec.ControlPlaneMode).To(Equal(bootstrapv1beta2.ControlPlaneModeInit))
+	g.Expect(kairosConfig.Spec.ControlPlaneJoinTokenSecretRef).NotTo(BeNil())
+	g.Expect(kairosConfig.Spec.ControlPlaneJoinTokenSecretRef.Name).To(Equal("cp-join-token"))
+}
+
+func TestCreateControlPlaneMachine_JoinMode(t *testing.T) {
+	g := NewWithT(t)
+
+	scheme := runtime.NewScheme()
+	g.Expect(bootstrapv1beta2.AddToScheme(scheme)).To(Succeed())
+	g.Expect(controlplanev1beta2.AddToScheme(scheme)).To(Succeed())
+	g.Expect(clusterv1.AddToScheme(scheme)).To(Succeed())
+	g.Expect(corev1.AddToScheme(scheme)).To(Succeed())
+
+	replicas := int32(3)
+	kcp := &controlplanev1beta2.KairosControlPlane{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-kcp",
+			Namespace: "default",
+		},
+		Spec: controlplanev1beta2.KairosControlPlaneSpec{
+			Replicas: &replicas,
+			Version:  "v1.30.0+k0s.0",
+			ControlPlaneJoinTokenSecretRef: &controlplanev1beta2.ControlPlaneTokenSecretReference{
+				Name: "cp-join-token",
+			},
+			MachineTemplate: controlplanev1beta2.KairosControlPlaneMachineTemplate{
+				InfrastructureRef: corev1.ObjectReference{
+					APIVersion: "infrastructure.cluster.x-k8s.io/v1beta1",
+					Kind:       "DockerMachineTemplate",
+					Name:       "test-template",
+					Namespace:  "default",
+				},
+			},
+			KairosConfigTemplate: controlplanev1beta2.KairosConfigTemplateReference{
+				Name: "test-config-template",
+			},
+		},
+	}
+
+	cluster := &clusterv1.Cluster{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-cluster",
+			Namespace: "default",
+		},
+	}
+
+	template := &bootstrapv1beta2.KairosConfigTemplate{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-config-template",
+			Namespace: "default",
+		},
+		Spec: bootstrapv1beta2.KairosConfigTemplateSpec{
+			Template: bootstrapv1beta2.KairosConfigTemplateResource{
+				Spec: bootstrapv1beta2.KairosConfigSpec{
+					Role:              "control-plane",
+					Distribution:      "k0s",
+					KubernetesVersion: "v1.30.0+k0s.0",
+				},
+			},
+		},
+	}
+
+	infraTemplate := &unstructured.Unstructured{}
+	infraTemplate.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "infrastructure.cluster.x-k8s.io",
+		Version: "v1beta1",
+		Kind:    "DockerMachineTemplate",
+	})
+	infraTemplate.SetName("test-template")
+	infraTemplate.SetNamespace("default")
+	infraTemplate.Object["spec"] = map[string]interface{}{
+		"template": map[string]interface{}{
+			"spec": map[string]interface{}{},
+		},
+	}
+
+	existingMachine := &clusterv1.Machine{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-kcp-0",
+			Namespace: "default",
+			Labels: map[string]string{
+				clusterv1.ClusterNameLabel:         "test-cluster",
+				clusterv1.MachineControlPlaneLabel: "",
+			},
+			Annotations: map[string]string{
+				"controlplane.cluster.x-k8s.io/kairos-control-plane-mode": string(bootstrapv1beta2.ControlPlaneModeInit),
+			},
+			OwnerReferences: []metav1.OwnerReference{
+				*metav1.NewControllerRef(kcp, controlplanev1beta2.GroupVersion.WithKind("KairosControlPlane")),
+			},
+		},
+	}
+
+	client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(template, infraTemplate, existingMachine).Build()
+	reconciler := &KairosControlPlaneReconciler{
+		Client: client,
+		Scheme: scheme,
+	}
+
+	err := reconciler.createControlPlaneMachine(
+		context.Background(),
+		log.Log,
+		kcp,
+		cluster,
+		1,
+	)
+
+	g.Expect(err).NotTo(HaveOccurred())
+
+	kairosConfig := &bootstrapv1beta2.KairosConfig{}
+	err = client.Get(context.Background(), types.NamespacedName{
+		Name:      "test-kcp-1",
+		Namespace: "default",
+	}, kairosConfig)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(kairosConfig.Spec.ControlPlaneMode).To(Equal(bootstrapv1beta2.ControlPlaneModeJoin))
 }
 
 func TestResolveSSHHost_KubevirtFallback(t *testing.T) {

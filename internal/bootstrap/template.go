@@ -32,6 +32,7 @@ var templateFS embed.FS
 // TemplateData holds data for rendering the Kairos cloud-config template
 type TemplateData struct {
 	Role                           string
+	ControlPlaneMode               bootstrapv1beta2.ControlPlaneMode
 	SingleNode                     bool
 	Hostname                       string
 	UserName                       string
@@ -40,6 +41,7 @@ type TemplateData struct {
 	GitHubUser                     string
 	SSHPublicKey                   string
 	WorkerToken                    string
+	ControlPlaneJoinToken          string
 	Manifests                      []bootstrapv1beta2.Manifest
 	HostnamePrefix                 string
 	DNSServers                     []string

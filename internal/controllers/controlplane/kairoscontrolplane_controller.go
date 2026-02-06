@@ -61,7 +61,10 @@ type KairosControlPlaneReconciler struct {
 	Scheme *runtime.Scheme
 }
 
-const controlPlaneLBServiceSuffix = "control-plane-lb"
+const (
+	controlPlaneLBServiceSuffix   = "control-plane-lb"
+	controlPlaneModeAnnotationKey = "controlplane.cluster.x-k8s.io/kairos-control-plane-mode"
+)
 
 //+kubebuilder:rbac:groups=controlplane.cluster.x-k8s.io,resources=kairoscontrolplanes,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=controlplane.cluster.x-k8s.io,resources=kairoscontrolplanes/status,verbs=get;update;patch
@@ -496,6 +499,19 @@ func (r *KairosControlPlaneReconciler) reconcileMachines(ctx context.Context, lo
 func (r *KairosControlPlaneReconciler) createControlPlaneMachine(ctx context.Context, log logr.Logger, kcp *controlplanev1beta2.KairosControlPlane, cluster *clusterv1.Cluster, index int32) error {
 	machineName := fmt.Sprintf("%s-%d", kcp.Name, index)
 
+	machines, err := r.getControlPlaneMachines(ctx, kcp, cluster)
+	if err != nil {
+		return fmt.Errorf("failed to list control plane machines: %w", err)
+	}
+	initMachineName, err := r.ensureInitMachine(ctx, log, kcp, machines)
+	if err != nil {
+		return fmt.Errorf("failed to ensure init machine: %w", err)
+	}
+	controlPlaneMode := bootstrapv1beta2.ControlPlaneModeJoin
+	if initMachineName == "" {
+		controlPlaneMode = bootstrapv1beta2.ControlPlaneModeInit
+	}
+
 	// Create KairosConfig
 	kairosConfig := &bootstrapv1beta2.KairosConfig{
 		ObjectMeta: metav1.ObjectMeta{
@@ -504,6 +520,9 @@ func (r *KairosControlPlaneReconciler) createControlPlaneMachine(ctx context.Con
 			Labels: map[string]string{
 				clusterv1.ClusterNameLabel:         cluster.Name,
 				clusterv1.MachineControlPlaneLabel: "",
+			},
+			Annotations: map[string]string{
+				controlPlaneModeAnnotationKey: string(controlPlaneMode),
 			},
 			OwnerReferences: []metav1.OwnerReference{
 				*metav1.NewControllerRef(kcp, controlplanev1beta2.GroupVersion.WithKind("KairosControlPlane")),
@@ -538,9 +557,11 @@ func (r *KairosControlPlaneReconciler) createControlPlaneMachine(ctx context.Con
 		kairosConfig.Spec = template.Spec.Template.Spec
 		kairosConfig.Spec.Role = "control-plane"
 		kairosConfig.Spec.KubernetesVersion = kcp.Spec.Version
-		// Override SingleNode based on replicas (replicas takes precedence)
-		kairosConfig.Spec.SingleNode = (replicas == 1)
 	}
+	// Override SingleNode based on replicas (replicas takes precedence)
+	kairosConfig.Spec.SingleNode = (replicas == 1)
+	kairosConfig.Spec.ControlPlaneMode = controlPlaneMode
+	kairosConfig.Spec.ControlPlaneJoinTokenSecretRef = toBootstrapJoinTokenRef(kcp.Spec.ControlPlaneJoinTokenSecretRef)
 
 	if err := r.Create(ctx, kairosConfig); err != nil {
 		if !apierrors.IsAlreadyExists(err) {
@@ -562,6 +583,9 @@ func (r *KairosControlPlaneReconciler) createControlPlaneMachine(ctx context.Con
 			Labels: map[string]string{
 				clusterv1.ClusterNameLabel:         cluster.Name,
 				clusterv1.MachineControlPlaneLabel: "",
+			},
+			Annotations: map[string]string{
+				controlPlaneModeAnnotationKey: string(controlPlaneMode),
 			},
 			OwnerReferences: []metav1.OwnerReference{
 				*metav1.NewControllerRef(kcp, controlplanev1beta2.GroupVersion.WithKind("KairosControlPlane")),
@@ -588,6 +612,75 @@ func (r *KairosControlPlaneReconciler) createControlPlaneMachine(ctx context.Con
 	}
 
 	return r.Create(ctx, machine)
+}
+
+func (r *KairosControlPlaneReconciler) ensureInitMachine(ctx context.Context, log logr.Logger, kcp *controlplanev1beta2.KairosControlPlane, machines []*clusterv1.Machine) (string, error) {
+	for _, machine := range machines {
+		if machine.Annotations != nil && machine.Annotations[controlPlaneModeAnnotationKey] == string(bootstrapv1beta2.ControlPlaneModeInit) {
+			return machine.Name, nil
+		}
+	}
+	if len(machines) == 0 {
+		return "", nil
+	}
+
+	candidate := selectInitCandidate(machines, kcp.Name)
+	if candidate == nil {
+		return "", nil
+	}
+	if candidate.Annotations == nil {
+		candidate.Annotations = map[string]string{}
+	}
+	candidate.Annotations[controlPlaneModeAnnotationKey] = string(bootstrapv1beta2.ControlPlaneModeInit)
+	if err := r.Update(ctx, candidate); err != nil {
+		return "", fmt.Errorf("failed to annotate init machine %s: %w", candidate.Name, err)
+	}
+	log.Info("Selected init control-plane machine", "machine", candidate.Name)
+	return candidate.Name, nil
+}
+
+func selectInitCandidate(machines []*clusterv1.Machine, kcpName string) *clusterv1.Machine {
+	prefix := fmt.Sprintf("%s-", kcpName)
+	var lowestOrdinal *clusterv1.Machine
+	lowestIndex := int32(0)
+
+	for _, machine := range machines {
+		if !strings.HasPrefix(machine.Name, prefix) {
+			continue
+		}
+		suffix := strings.TrimPrefix(machine.Name, prefix)
+		if suffix == "" {
+			continue
+		}
+		if idx, err := strconv.Atoi(suffix); err == nil {
+			if lowestOrdinal == nil || int32(idx) < lowestIndex {
+				lowestOrdinal = machine
+				lowestIndex = int32(idx)
+			}
+		}
+	}
+	if lowestOrdinal != nil {
+		return lowestOrdinal
+	}
+
+	var oldest *clusterv1.Machine
+	for _, machine := range machines {
+		if oldest == nil || machine.CreationTimestamp.Before(&oldest.CreationTimestamp) {
+			oldest = machine
+		}
+	}
+	return oldest
+}
+
+func toBootstrapJoinTokenRef(ref *controlplanev1beta2.ControlPlaneTokenSecretReference) *bootstrapv1beta2.ControlPlaneTokenSecretReference {
+	if ref == nil {
+		return nil
+	}
+	return &bootstrapv1beta2.ControlPlaneTokenSecretReference{
+		Name:      ref.Name,
+		Key:       ref.Key,
+		Namespace: ref.Namespace,
+	}
 }
 
 func (r *KairosControlPlaneReconciler) createInfrastructureMachine(ctx context.Context, log logr.Logger, kcp *controlplanev1beta2.KairosControlPlane, cluster *clusterv1.Cluster, machineName string) (client.Object, error) {
