@@ -31,7 +31,15 @@ Expected:
 - 1 config with `control-plane` + `init`
 - 2 configs with `control-plane` + `join`
 
-4) Verify Cluster readiness:
+4) Inspect init/join selection on Machines:
+```
+kubectl get machines -n default -o custom-columns=NAME:.metadata.name,MODE:.metadata.annotations.controlplane\\.cluster\\.x-k8s\\.io/kairos-control-plane-mode
+```
+Expected:
+- Exactly one Machine marked `init`
+- Remaining Machines marked `join`
+
+5) Verify Cluster readiness:
 ```
 kubectl get cluster kairos-cluster-ha -n default
 kubectl describe cluster kairos-cluster-ha -n default
@@ -39,7 +47,7 @@ kubectl describe cluster kairos-cluster-ha -n default
 Expected:
 - Cluster conditions move to Ready once control plane is up.
 
-5) Validate k0s HA:
+6) Validate k0s HA:
 ```
 clusterctl get kubeconfig kairos-cluster-ha > kairos-ha.kubeconfig
 kubectl --kubeconfig kairos-ha.kubeconfig get nodes
@@ -49,6 +57,27 @@ Expected:
 
 Optional (if k0s CLI is available inside nodes):
 - Check etcd health using k0s tools.
+
+### Repair test (CAPV)
+1) Identify the init Machine:
+```
+kubectl get machines -n default -o custom-columns=NAME:.metadata.name,MODE:.metadata.annotations.controlplane\\.cluster\\.x-k8s\\.io/kairos-control-plane-mode
+```
+
+2) Delete a join Machine (do not delete the init Machine):
+```
+kubectl delete machine <join-machine-name> -n default
+```
+
+3) Verify a replacement Machine is created and marked as join:
+```
+kubectl get machines -n default -o custom-columns=NAME:.metadata.name,MODE:.metadata.annotations.controlplane\\.cluster\\.x-k8s\\.io/kairos-control-plane-mode
+kubectl get kairosconfigs -n default -o custom-columns=NAME:.metadata.name,ROLE:.spec.role,MODE:.spec.controlPlaneMode
+```
+Expected:
+- The deleted Machine is replaced.
+- The new Machine is `join`, not `init`.
+- Cluster remains Ready.
 
 ## CAPK HA bring-up (experimental)
 
