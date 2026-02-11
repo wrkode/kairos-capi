@@ -20,6 +20,8 @@ package v1beta2
 const (
 	// AvailableCondition indicates that the control plane is available
 	AvailableCondition = "Available"
+	// ControlPlaneJoinTokenAvailableCondition indicates the controller join token is available
+	ControlPlaneJoinTokenAvailableCondition = "ControlPlaneJoinTokenAvailable"
 )
 
 // Condition reasons
@@ -35,6 +37,12 @@ const (
 
 	// ControlPlaneInitializationSucceededReason indicates that control plane initialization succeeded
 	ControlPlaneInitializationSucceededReason = "ControlPlaneInitializationSucceeded"
+
+	// ControlPlaneJoinTokenNotAvailableReason indicates the join token isn't available yet
+	ControlPlaneJoinTokenNotAvailableReason = "ControlPlaneJoinTokenNotAvailable"
+
+	// ControlPlaneJoinTokenAvailableReason indicates the join token is available
+	ControlPlaneJoinTokenAvailableReason = "ControlPlaneJoinTokenAvailable"
 
 	// ScalingUpReason indicates that the control plane is scaling up
 	ScalingUpReason = "ScalingUp"

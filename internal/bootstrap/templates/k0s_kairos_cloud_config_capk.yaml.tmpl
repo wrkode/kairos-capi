@@ -31,7 +31,7 @@ hostname: {{ .Hostname }}
 hostname: {{ .HostnamePrefix }}{{ "{{ trunc 4 .MachineID }}" }}
 {{- end }}
 
-{{- if .Install }}
+{{- if and .Install .Install.Auto }}
 install:
   auto: {{ .Install.Auto }}
   device: "{{ .Install.Device }}"
@@ -549,7 +549,9 @@ stages:
   boot:
     - name: "Ensure SSH service is enabled"
       commands:
+        - mkdir -p /etc/ssh/sshd_config.d
         - systemctl enable --now sshd || systemctl enable --now ssh || true
+        - systemctl restart sshd || systemctl restart ssh || true
     - name: "Allow SSH password authentication"
       files:
         - path: /etc/ssh/sshd_config.d/60-kairos-capi.conf
@@ -559,9 +561,6 @@ stages:
           content: |
             PasswordAuthentication yes
             KbdInteractiveAuthentication yes
-      commands:
-        - mkdir -p /etc/ssh/sshd_config.d
-        - systemctl restart sshd || systemctl restart ssh || true
     {{- if .DNSServers }}
     - name: "Configure DNS resolvers for early boot"
       dns:
@@ -571,11 +570,10 @@ stages:
         {{- end }}
         path: "/etc/resolv.conf"
     {{- end }}
-  initramfs:
     - name: "Create k0s post-bootstrap service and script"
       files:
         {{- if or .Hostname .HostnamePrefix }}
-        - path: /sysroot/usr/local/etc/hostname
+        - path: /usr/local/etc/hostname
           permissions: "0644"
           owner: 0
           group: 0
@@ -586,7 +584,7 @@ stages:
             {{ .HostnamePrefix }}{{ "{{ trunc 4 .MachineID }}" }}
             {{- end }}
         {{- end }}
-        - path: /sysroot/etc/systemd/system/kairos-k0s-post-bootstrap.service
+        - path: /etc/systemd/system/kairos-k0s-post-bootstrap.service
           permissions: "0644"
           owner: 0
           group: 0
@@ -608,25 +606,7 @@ stages:
             
             [Install]
             WantedBy=multi-user.target
-        - path: /sysroot/etc/systemd/system/kairos-k0s-post-bootstrap-enable.service
-          permissions: "0644"
-          owner: 0
-          group: 0
-          content: |
-            [Unit]
-            Description=Enable kairos-k0s-post-bootstrap service
-            After=systemd-udev-settle.service
-            Before=multi-user.target
-            
-            [Service]
-            Type=oneshot
-            RemainAfterExit=yes
-            ExecStart=/bin/systemctl daemon-reload
-            ExecStart=/bin/systemctl enable kairos-k0s-post-bootstrap.service
-            
-            [Install]
-            WantedBy=multi-user.target
-        - path: /sysroot/usr/local/bin/kairos-k0s-post-bootstrap.sh
+        - path: /usr/local/bin/kairos-k0s-post-bootstrap.sh
           permissions: "0755"
           owner: 0
           group: 0
@@ -653,7 +633,149 @@ stages:
               fi
             fi
             {{- end }}
-
+            
+            {{- if .ProviderID }}
+            # Wait for k0s to be ready and Node to be registered
+            echo "Waiting for k0s node to be registered..."
+            export KUBECONFIG=/var/lib/k0s/pki/admin.conf
+            MAX_WAIT=300
+            ELAPSED=0
+            NODE_REGISTERED=false
+            while ! k0s kubectl --kubeconfig /var/lib/k0s/pki/admin.conf get node $(hostname) &>/dev/null; do
+              if [ $ELAPSED -ge $MAX_WAIT ]; then
+                echo "WARN: Timeout waiting for node to be registered"
+                break
+              fi
+              echo "Waiting for node to be registered... (${ELAPSED}s/${MAX_WAIT}s)"
+              sleep 5
+              ELAPSED=$((ELAPSED + 5))
+            done
+            if k0s kubectl --kubeconfig /var/lib/k0s/pki/admin.conf get node $(hostname) &>/dev/null; then
+              NODE_REGISTERED=true
+            fi
+            
+            # Set providerID on the Node
+            # Retry in case of temporary API server unavailability
+            if [ "$NODE_REGISTERED" = "true" ]; then
+              echo "Setting providerID={{ .ProviderID }} on node $(hostname)..."
+              PROVIDER_ID_SET=false
+              for i in {1..30}; do
+                if k0s kubectl --kubeconfig /var/lib/k0s/pki/admin.conf patch node $(hostname) --type=merge -p '{"spec":{"providerID":"{{ .ProviderID }}"}}' &>/dev/null; then
+                  echo "Successfully set providerID={{ .ProviderID }} on node $(hostname)"
+                  PROVIDER_ID_SET=true
+                  break
+                fi
+                echo "Attempt $i/30: Failed to set providerID, retrying in 5 seconds..."
+                sleep 5
+              done
+              if [ "$PROVIDER_ID_SET" != "true" ]; then
+                echo "WARN: Failed to set providerID after 30 attempts"
+              fi
+            else
+              echo "WARN: Node not registered; skipping providerID patch"
+            fi
+            {{- else }}
+            echo "No providerID to set"
+            {{- end }}
+            
+            # Mark bootstrap success for CAPI/CAPK consumers
+            # This file is used by Cluster API to determine bootstrap completion
+            mkdir -p /run/cluster-api
+            echo "success" > /run/cluster-api/bootstrap-success.complete
+            chmod 0644 /run/cluster-api/bootstrap-success.complete
+            
+            echo "k0s post-bootstrap tasks completed successfully"
+      commands:
+        - systemctl daemon-reload || true
+        - systemctl enable kairos-k0s-post-bootstrap.service || true
+        - systemctl start kairos-k0s-post-bootstrap.service || true
+    - name: "Ensure SSH service is enabled"
+      commands:
+        - mkdir -p /etc/ssh/sshd_config.d
+        - systemctl enable --now sshd || systemctl enable --now ssh || true
+        - systemctl restart sshd || systemctl restart ssh || true
+    - name: "Allow SSH password authentication"
+      files:
+        - path: /etc/ssh/sshd_config.d/60-kairos-capi.conf
+          permissions: "0644"
+          owner: 0
+          group: 0
+          content: |
+            PasswordAuthentication yes
+            KbdInteractiveAuthentication yes
+    {{- if .DNSServers }}
+    - name: "Configure DNS resolvers for early boot"
+      dns:
+        nameservers:
+        {{- range .DNSServers }}
+          - {{ . }}
+        {{- end }}
+        path: "/etc/resolv.conf"
+    {{- end }}
+    - name: "Create k0s post-bootstrap service and script"
+      files:
+        {{- if or .Hostname .HostnamePrefix }}
+        - path: /usr/local/etc/hostname
+          permissions: "0644"
+          owner: 0
+          group: 0
+          content: |
+            {{- if .Hostname }}
+            {{ .Hostname }}
+            {{- else }}
+            {{ .HostnamePrefix }}{{ "{{ trunc 4 .MachineID }}" }}
+            {{- end }}
+        {{- end }}
+        - path: /etc/systemd/system/kairos-k0s-post-bootstrap.service
+          permissions: "0644"
+          owner: 0
+          group: 0
+          content: |
+            [Unit]
+            Description=Kairos k0s post-bootstrap tasks
+            {{- if eq .Role "control-plane" }}
+            After=k0s.service
+            Wants=k0s.service
+            {{- else }}
+            After=k0s-worker.service
+            Wants=k0s-worker.service
+            {{- end }}
+            
+            [Service]
+            Type=oneshot
+            RemainAfterExit=yes
+            ExecStart=/usr/local/bin/kairos-k0s-post-bootstrap.sh
+            
+            [Install]
+            WantedBy=multi-user.target
+        - path: /usr/local/bin/kairos-k0s-post-bootstrap.sh
+          permissions: "0755"
+          owner: 0
+          group: 0
+          content: |
+            #!/bin/bash
+            set -e
+            
+            {{- if .IsKubeVirt }}
+            # CAPK: always mark bootstrap success on script exit
+            mark_bootstrap_success() {
+              mkdir -p /run/cluster-api
+              echo "success" > /run/cluster-api/bootstrap-success.complete
+              chmod 0644 /run/cluster-api/bootstrap-success.complete
+            }
+            trap mark_bootstrap_success EXIT
+            {{- end }}
+            
+            {{- if .HostnamePrefix }}
+            # Enforce hostname from cloud-config on immutable rootfs
+            if [ -f /usr/local/etc/hostname ]; then
+              /usr/bin/hostnamectl set-hostname "$(cat /usr/local/etc/hostname)"
+              if ! grep -qE "127\.0\.1\.1[[:space:]]+$(cat /usr/local/etc/hostname)" /etc/hosts; then
+                echo "127.0.1.1 $(cat /usr/local/etc/hostname)" >> /etc/hosts
+              fi
+            fi
+            {{- end }}
+            
             {{- if .Manifests }}
             # Write k0s manifests
             echo "Writing k0s manifests..."
@@ -674,36 +796,66 @@ MANIFEST_EOF
             export KUBECONFIG=/var/lib/k0s/pki/admin.conf
             MAX_WAIT=300
             ELAPSED=0
-            while ! kubectl get node $(hostname) &>/dev/null; do
+            NODE_REGISTERED=false
+            while ! k0s kubectl --kubeconfig /var/lib/k0s/pki/admin.conf get node $(hostname) &>/dev/null; do
               if [ $ELAPSED -ge $MAX_WAIT ]; then
-                echo "ERROR: Timeout waiting for node to be registered"
-                exit 1
+                echo "WARN: Timeout waiting for node to be registered"
+                break
               fi
               echo "Waiting for node to be registered... (${ELAPSED}s/${MAX_WAIT}s)"
               sleep 5
               ELAPSED=$((ELAPSED + 5))
             done
+            if k0s kubectl --kubeconfig /var/lib/k0s/pki/admin.conf get node $(hostname) &>/dev/null; then
+              NODE_REGISTERED=true
+            fi
             
             # Set providerID on the Node
             # Retry in case of temporary API server unavailability
-            echo "Setting providerID={{ .ProviderID }} on node $(hostname)..."
-            PROVIDER_ID_SET=false
-            for i in {1..30}; do
-              if kubectl patch node $(hostname) --type=merge -p '{"spec":{"providerID":"{{ .ProviderID }}"}}' &>/dev/null; then
-                echo "Successfully set providerID={{ .ProviderID }} on node $(hostname)"
-                PROVIDER_ID_SET=true
-                break
+            if [ "$NODE_REGISTERED" = "true" ]; then
+              echo "Setting providerID={{ .ProviderID }} on node $(hostname)..."
+              PROVIDER_ID_SET=false
+              for i in {1..30}; do
+                if k0s kubectl --kubeconfig /var/lib/k0s/pki/admin.conf patch node $(hostname) --type=merge -p '{"spec":{"providerID":"{{ .ProviderID }}"}}' &>/dev/null; then
+                  echo "Successfully set providerID={{ .ProviderID }} on node $(hostname)"
+                  PROVIDER_ID_SET=true
+                  break
+                fi
+                echo "Attempt $i/30: Failed to set providerID, retrying in 5 seconds..."
+                sleep 5
+              done
+              if [ "$PROVIDER_ID_SET" != "true" ]; then
+                echo "WARN: Failed to set providerID after 30 attempts"
               fi
-              echo "Attempt $i/30: Failed to set providerID, retrying in 5 seconds..."
-              sleep 5
-            done
-            
-            if [ "$PROVIDER_ID_SET" != "true" ]; then
-              echo "ERROR: Failed to set providerID after 30 attempts"
-              exit 1
+            else
+              echo "WARN: Node not registered; skipping providerID patch"
             fi
             {{- else }}
             echo "No providerID to set"
+            {{- end }}
+            
+            {{- if and (eq .Role "control-plane") (eq .ControlPlaneMode "init") (not .SingleNode) }}
+            # Publish controller join token into the workload cluster (init node only)
+            echo "Ensuring controller join token Secret exists in workload cluster..."
+            for i in {1..30}; do
+              if k0s kubectl --kubeconfig /var/lib/k0s/pki/admin.conf -n kairos-system get secret k0s-controller-join-token >/dev/null 2>&1; then
+                echo "Join token Secret already exists."
+                break
+              fi
+              if k0s kubectl --kubeconfig /var/lib/k0s/pki/admin.conf get --raw /readyz >/dev/null 2>&1; then
+                TOKEN="$(k0s token create --role=controller)"
+                k0s kubectl --kubeconfig /var/lib/k0s/pki/admin.conf \
+                  create namespace kairos-system --dry-run=client -o yaml | k0s kubectl apply -f -
+                k0s kubectl --kubeconfig /var/lib/k0s/pki/admin.conf -n kairos-system \
+                  create secret generic k0s-controller-join-token \
+                  --from-literal=token="${TOKEN}" \
+                  --dry-run=client -o yaml | k0s kubectl apply -f -
+                echo "Join token Secret created."
+                break
+              fi
+              echo "Waiting for k0s API to be ready for join token creation..."
+              sleep 10
+            done
             {{- end }}
             
             {{- if .ManagementKubeconfigToken }}
@@ -775,9 +927,8 @@ MANIFEST_EOF
             
             echo "k0s post-bootstrap tasks completed successfully"
       commands:
-        # Create symlink to enable the helper service that enables the main service
-        - mkdir -p /sysroot/etc/systemd/system/multi-user.target.wants
-        - ln -sf /sysroot/etc/systemd/system/kairos-k0s-post-bootstrap-enable.service /sysroot/etc/systemd/system/multi-user.target.wants/kairos-k0s-post-bootstrap-enable.service || true
+        - systemctl daemon-reload
+        - systemctl enable --now kairos-k0s-post-bootstrap.service || true
 
 runcmd:
 {{- if .IsKubeVirt }}

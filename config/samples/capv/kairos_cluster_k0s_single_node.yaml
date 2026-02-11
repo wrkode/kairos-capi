@@ -115,6 +115,10 @@ spec:
       role: control-plane
       distribution: k0s
       kubernetesVersion: "v1.30.0+k0s.0"
+      install:
+        auto: true
+        device: "auto"
+        reboot: true
       userName: kairos
       userPassword: kairos
       userGroups:

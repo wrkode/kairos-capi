@@ -33,6 +33,11 @@ func TestRenderK0sCloudConfig_ControlPlaneSingleNode(t *testing.T) {
 		UserGroups:     []string{"admin"},
 		GitHubUser:     "testuser",
 		HostnamePrefix: "metal-",
+		Install: &InstallConfig{
+			Auto:   true,
+			Device: "auto",
+			Reboot: true,
+		},
 	}
 
 	result, err := RenderK0sCloudConfig(data)
@@ -73,6 +78,20 @@ func TestRenderK0sCloudConfig_ControlPlaneSingleNode(t *testing.T) {
 	// Check for GitHub user
 	if !strings.Contains(result, "github:testuser") {
 		t.Error("Missing GitHub user SSH key")
+	}
+
+	// Check for install block
+	if !strings.Contains(result, "\ninstall:\n") {
+		t.Error("Missing install block")
+	}
+	if !strings.Contains(result, "auto: true") {
+		t.Error("Missing install auto true")
+	}
+	if !strings.Contains(result, "device: \"auto\"") {
+		t.Error("Missing install device")
+	}
+	if !strings.Contains(result, "reboot: true") {
+		t.Error("Missing install reboot true")
 	}
 
 	// Check for capk groups list
@@ -134,6 +153,29 @@ func TestRenderK0sCloudConfig_ControlPlaneJoin(t *testing.T) {
 	}
 	if !strings.Contains(result, "join-token-123") {
 		t.Error("Missing control-plane join token content")
+	}
+}
+
+func TestRenderK0sCloudConfig_ControlPlaneInitPublishesJoinToken(t *testing.T) {
+	data := TemplateData{
+		Role:             "control-plane",
+		ControlPlaneMode: bootstrapv1beta2.ControlPlaneModeInit,
+		SingleNode:       false,
+		UserName:         "kairos",
+		UserPassword:     "kairos",
+		UserGroups:       []string{"admin"},
+	}
+
+	result, err := RenderK0sCloudConfig(data)
+	if err != nil {
+		t.Fatalf("Failed to render template: %v", err)
+	}
+
+	if !strings.Contains(result, "k0s token create --role=controller") {
+		t.Error("Missing controller join token creation command")
+	}
+	if !strings.Contains(result, "k0s-controller-join-token") {
+		t.Error("Missing controller join token secret name")
 	}
 }
 

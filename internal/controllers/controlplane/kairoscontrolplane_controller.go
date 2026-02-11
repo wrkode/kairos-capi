@@ -64,6 +64,9 @@ type KairosControlPlaneReconciler struct {
 const (
 	controlPlaneLBServiceSuffix   = "control-plane-lb"
 	controlPlaneModeAnnotationKey = "controlplane.cluster.x-k8s.io/kairos-control-plane-mode"
+	controlPlaneJoinTokenSuffix   = "k0s-controller-join-token"
+	controlPlaneJoinTokenWorkload = "k0s-controller-join-token"
+	controlPlaneJoinTokenNS       = "kairos-system"
 )
 
 //+kubebuilder:rbac:groups=controlplane.cluster.x-k8s.io,resources=kairoscontrolplanes,verbs=get;list;watch;create;update;patch;delete
@@ -141,6 +144,8 @@ func (r *KairosControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.R
 		log.Info("Cluster is not available yet")
 		return ctrl.Result{}, nil
 	}
+
+	requeueAfter := time.Duration(0)
 
 	// Always update observedGeneration
 	kcp.Status.ObservedGeneration = kcp.Generation
@@ -295,6 +300,14 @@ func (r *KairosControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.R
 		}
 	}
 
+	joinTokenAvailable, err := r.ensureControlPlaneJoinToken(ctx, log, kcp, cluster)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if !joinTokenAvailable && kcp.Spec.Replicas != nil && *kcp.Spec.Replicas > 1 {
+		requeueAfter = 10 * time.Second
+	}
+
 	// Ensure Node providerID is set in the workload cluster once kubeconfig is available.
 	// This avoids relying on in-VM scripts and unblocks NodeRef reconciliation.
 	if err := r.ensureProviderIDOnNodes(ctx, log, kcp, cluster); err != nil {
@@ -359,6 +372,9 @@ func (r *KairosControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.R
 		}
 	}
 
+	if requeueAfter > 0 {
+		return ctrl.Result{RequeueAfter: requeueAfter}, nil
+	}
 	return ctrl.Result{}, nil
 }
 
@@ -414,6 +430,17 @@ func (r *KairosControlPlaneReconciler) reconcileMachines(ctx context.Context, lo
 	desiredReplicas := int32(1)
 	if kcp.Spec.Replicas != nil {
 		desiredReplicas = *kcp.Spec.Replicas
+	}
+
+	if desiredReplicas > 1 {
+		joinAvailable, err := r.isJoinTokenAvailable(ctx, kcp, cluster)
+		if err != nil {
+			return fmt.Errorf("failed to check control-plane join token availability: %w", err)
+		}
+		if !joinAvailable {
+			log.Info("Control-plane join token not available; limiting to init machine", "desired", desiredReplicas)
+			desiredReplicas = 1
+		}
 	}
 
 	// List existing control plane machines
@@ -561,7 +588,9 @@ func (r *KairosControlPlaneReconciler) createControlPlaneMachine(ctx context.Con
 	// Override SingleNode based on replicas (replicas takes precedence)
 	kairosConfig.Spec.SingleNode = (replicas == 1)
 	kairosConfig.Spec.ControlPlaneMode = controlPlaneMode
-	kairosConfig.Spec.ControlPlaneJoinTokenSecretRef = toBootstrapJoinTokenRef(kcp.Spec.ControlPlaneJoinTokenSecretRef)
+	if kairosConfig.Spec.Distribution != "" && kairosConfig.Spec.Distribution != "k0s" {
+		kairosConfig.Spec.ControlPlaneJoinTokenSecretRef = toBootstrapJoinTokenRef(kcp.Spec.ControlPlaneJoinTokenSecretRef)
+	}
 
 	if err := r.Create(ctx, kairosConfig); err != nil {
 		if !apierrors.IsAlreadyExists(err) {
@@ -1122,6 +1151,189 @@ func (r *KairosControlPlaneReconciler) ensureProviderIDOnNodes(ctx context.Conte
 	}
 
 	return nil
+}
+
+func (r *KairosControlPlaneReconciler) ensureControlPlaneJoinToken(ctx context.Context, log logr.Logger, kcp *controlplanev1beta2.KairosControlPlane, cluster *clusterv1.Cluster) (bool, error) {
+	replicas := int32(1)
+	if kcp.Spec.Replicas != nil {
+		replicas = *kcp.Spec.Replicas
+	}
+	if replicas <= 1 {
+		conditions.MarkTrue(kcp, controlplanev1beta2.ControlPlaneJoinTokenAvailableCondition)
+		return true, nil
+	}
+
+	distribution, err := r.getControlPlaneDistribution(ctx, kcp)
+	if err != nil {
+		return false, err
+	}
+	if distribution != "" && distribution != "k0s" {
+		available, err := r.isJoinTokenAvailable(ctx, kcp, cluster)
+		if err != nil {
+			return false, err
+		}
+		if available {
+			conditions.MarkTrue(kcp, controlplanev1beta2.ControlPlaneJoinTokenAvailableCondition)
+		} else {
+			conditions.MarkFalse(kcp, controlplanev1beta2.ControlPlaneJoinTokenAvailableCondition, controlplanev1beta2.ControlPlaneJoinTokenNotAvailableReason, clusterv1.ConditionSeverityInfo, "Join token secret is not available")
+		}
+		return available, nil
+	}
+
+	available, err := r.isJoinTokenAvailable(ctx, kcp, cluster)
+	if err != nil {
+		return false, err
+	}
+	if available {
+		conditions.MarkTrue(kcp, controlplanev1beta2.ControlPlaneJoinTokenAvailableCondition)
+		return true, nil
+	}
+
+	// Attempt to mirror join token from workload cluster into management cluster.
+	kubeconfigSecret := &corev1.Secret{}
+	kubeconfigKey := types.NamespacedName{
+		Namespace: cluster.Namespace,
+		Name:      fmt.Sprintf("%s-kubeconfig", cluster.Name),
+	}
+	if err := r.Get(ctx, kubeconfigKey, kubeconfigSecret); err != nil {
+		if apierrors.IsNotFound(err) {
+			conditions.MarkFalse(kcp, controlplanev1beta2.ControlPlaneJoinTokenAvailableCondition, controlplanev1beta2.ControlPlaneJoinTokenNotAvailableReason, clusterv1.ConditionSeverityInfo, "Waiting for workload kubeconfig")
+			return false, nil
+		}
+		return false, err
+	}
+	kubeconfig, ok := kubeconfigSecret.Data["value"]
+	if !ok || len(kubeconfig) == 0 {
+		conditions.MarkFalse(kcp, controlplanev1beta2.ControlPlaneJoinTokenAvailableCondition, controlplanev1beta2.ControlPlaneJoinTokenNotAvailableReason, clusterv1.ConditionSeverityInfo, "Waiting for workload kubeconfig")
+		return false, nil
+	}
+
+	restConfig, err := clientcmd.RESTConfigFromKubeConfig(kubeconfig)
+	if err != nil {
+		return false, fmt.Errorf("failed to build workload rest config: %w", err)
+	}
+	workloadClient, err := client.New(restConfig, client.Options{Scheme: r.Scheme})
+	if err != nil {
+		return false, fmt.Errorf("failed to create workload client: %w", err)
+	}
+
+	workloadSecret := &corev1.Secret{}
+	workloadKey := types.NamespacedName{
+		Namespace: controlPlaneJoinTokenNS,
+		Name:      controlPlaneJoinTokenWorkload,
+	}
+	if err := workloadClient.Get(ctx, workloadKey, workloadSecret); err != nil {
+		if apierrors.IsNotFound(err) {
+			conditions.MarkFalse(kcp, controlplanev1beta2.ControlPlaneJoinTokenAvailableCondition, controlplanev1beta2.ControlPlaneJoinTokenNotAvailableReason, clusterv1.ConditionSeverityInfo, "Waiting for workload join token")
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to get workload join token secret: %w", err)
+	}
+
+	token, ok := workloadSecret.Data["token"]
+	if !ok || len(token) == 0 {
+		return false, fmt.Errorf("workload join token secret is missing token data")
+	}
+
+	secretName := fmt.Sprintf("%s-%s", cluster.Name, controlPlaneJoinTokenSuffix)
+	mgmtKey := types.NamespacedName{
+		Namespace: cluster.Namespace,
+		Name:      secretName,
+	}
+	mgmtSecret := &corev1.Secret{}
+	if err := r.Get(ctx, mgmtKey, mgmtSecret); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return false, err
+		}
+		mgmtSecret = &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      secretName,
+				Namespace: cluster.Namespace,
+				Labels: map[string]string{
+					clusterv1.ClusterNameLabel: cluster.Name,
+				},
+			},
+			Data: map[string][]byte{
+				"token": token,
+			},
+		}
+		if err := controllerutil.SetControllerReference(kcp, mgmtSecret, r.Scheme); err != nil {
+			return false, err
+		}
+		if err := r.Create(ctx, mgmtSecret); err != nil {
+			return false, err
+		}
+	} else {
+		if mgmtSecret.Labels == nil {
+			mgmtSecret.Labels = map[string]string{}
+		}
+		mgmtSecret.Labels[clusterv1.ClusterNameLabel] = cluster.Name
+		if mgmtSecret.Data == nil {
+			mgmtSecret.Data = map[string][]byte{}
+		}
+		mgmtSecret.Data["token"] = token
+		if err := controllerutil.SetControllerReference(kcp, mgmtSecret, r.Scheme); err != nil {
+			return false, err
+		}
+		if err := r.Update(ctx, mgmtSecret); err != nil {
+			return false, err
+		}
+	}
+
+	conditions.MarkTrue(kcp, controlplanev1beta2.ControlPlaneJoinTokenAvailableCondition)
+	return true, nil
+}
+
+func (r *KairosControlPlaneReconciler) isJoinTokenAvailable(ctx context.Context, kcp *controlplanev1beta2.KairosControlPlane, cluster *clusterv1.Cluster) (bool, error) {
+	distribution, err := r.getControlPlaneDistribution(ctx, kcp)
+	if err != nil {
+		return false, err
+	}
+	key := types.NamespacedName{
+		Namespace: cluster.Namespace,
+		Name:      fmt.Sprintf("%s-%s", cluster.Name, controlPlaneJoinTokenSuffix),
+	}
+	lookupKey := "token"
+	if distribution != "" && distribution != "k0s" && kcp.Spec.ControlPlaneJoinTokenSecretRef != nil && kcp.Spec.ControlPlaneJoinTokenSecretRef.Name != "" {
+		key.Name = kcp.Spec.ControlPlaneJoinTokenSecretRef.Name
+		if kcp.Spec.ControlPlaneJoinTokenSecretRef.Namespace != "" {
+			key.Namespace = kcp.Spec.ControlPlaneJoinTokenSecretRef.Namespace
+		}
+		if kcp.Spec.ControlPlaneJoinTokenSecretRef.Key != "" {
+			lookupKey = kcp.Spec.ControlPlaneJoinTokenSecretRef.Key
+		}
+	}
+
+	secret := &corev1.Secret{}
+	if err := r.Get(ctx, key, secret); err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	if token, ok := secret.Data[lookupKey]; ok && len(token) > 0 {
+		return true, nil
+	}
+	return false, nil
+}
+
+func (r *KairosControlPlaneReconciler) getControlPlaneDistribution(ctx context.Context, kcp *controlplanev1beta2.KairosControlPlane) (string, error) {
+	if kcp.Spec.KairosConfigTemplate.Name == "" {
+		return "k0s", nil
+	}
+	template := &bootstrapv1beta2.KairosConfigTemplate{}
+	templateKey := types.NamespacedName{
+		Namespace: kcp.Namespace,
+		Name:      kcp.Spec.KairosConfigTemplate.Name,
+	}
+	if err := r.Get(ctx, templateKey, template); err != nil {
+		return "", fmt.Errorf("failed to get KairosConfigTemplate: %w", err)
+	}
+	distribution := template.Spec.Template.Spec.Distribution
+	if distribution == "" {
+		distribution = "k0s"
+	}
+	return distribution, nil
 }
 
 // getInfrastructureProviderID attempts to retrieve providerID from the infrastructure machine object.

@@ -2,6 +2,8 @@
 
 **Important: This repo is under active development and not ready for production or testing deployments.**
 
+**Research for HA control-plane**
+
 Cluster API providers for Kairos OS.
 
 ## Overview

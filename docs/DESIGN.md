@@ -82,7 +82,6 @@ The controller generates Kairos cloud-config using provider-specific templates a
 3. Configures users with SSH keys (GitHub or raw public key)
 4. Writes worker tokens to `/etc/k0s/token` via `write_files`
 5. Deploys Kubernetes manifests to `/var/lib/k0s/manifests/` for automatic application
-
 Provider-specific behavior:
 - CAPV uses a CAPV-focused template and retrieves kubeconfig over SSH.
 - CAPK uses a CAPK-focused template with LoadBalancer-based control plane endpoint handling and in-guest kubeconfig push to the management cluster.

@@ -54,6 +54,7 @@ import (
 const controlPlaneLBServiceSuffix = "control-plane-lb"
 
 var errLBEndpointNotReady = errors.New("control plane load balancer endpoint not ready")
+var errJoinTokenNotReady = errors.New("control plane join token not ready")
 
 // KairosConfigReconciler reconciles a KairosConfig object
 type KairosConfigReconciler struct {
@@ -407,6 +408,10 @@ func (r *KairosConfigReconciler) reconcileBootstrapData(ctx context.Context, log
 			log.Info("Waiting for control plane LoadBalancer endpoint before generating cloud-config")
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 		}
+		if errors.Is(err, errJoinTokenNotReady) {
+			log.Info("Waiting for control plane join token before generating cloud-config")
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
 		return ctrl.Result{}, fmt.Errorf("failed to generate cloud-config: %w", err)
 	}
 
@@ -542,6 +547,13 @@ func isKubevirtMachine(machine *clusterv1.Machine) bool {
 		return false
 	}
 	return machine.Spec.InfrastructureRef.Kind == "KubevirtMachine" || machine.Spec.InfrastructureRef.Kind == "KubeVirtMachine"
+}
+
+func isVSphereMachine(machine *clusterv1.Machine) bool {
+	if machine == nil {
+		return false
+	}
+	return machine.Spec.InfrastructureRef.Kind == "VSphereMachine"
 }
 
 func (r *KairosConfigReconciler) sanitizeCapkUserdataSecret(ctx context.Context, log logr.Logger, kairosConfig *bootstrapv1beta2.KairosConfig, machine *clusterv1.Machine) (bool, bool, error) {
@@ -791,23 +803,26 @@ func (r *KairosConfigReconciler) generateK0sCloudConfig(ctx context.Context, log
 	// Get control-plane join token if needed (for control-plane join nodes)
 	var controlPlaneJoinToken string
 	if role == "control-plane" && controlPlaneMode == bootstrapv1beta2.ControlPlaneModeJoin && !singleNode {
-		if kairosConfig.Spec.ControlPlaneJoinTokenSecretRef == nil || kairosConfig.Spec.ControlPlaneJoinTokenSecretRef.Name == "" {
-			return "", fmt.Errorf("control-plane join requires ControlPlaneJoinTokenSecretRef to be set")
-		}
 		secretKey := types.NamespacedName{
-			Namespace: kairosConfig.Namespace,
-			Name:      kairosConfig.Spec.ControlPlaneJoinTokenSecretRef.Name,
+			Namespace: cluster.Namespace,
+			Name:      fmt.Sprintf("%s-k0s-controller-join-token", cluster.Name),
 		}
-		if kairosConfig.Spec.ControlPlaneJoinTokenSecretRef.Namespace != "" {
-			secretKey.Namespace = kairosConfig.Spec.ControlPlaneJoinTokenSecretRef.Namespace
+		key := "token"
+		if kairosConfig.Spec.ControlPlaneJoinTokenSecretRef != nil && kairosConfig.Spec.ControlPlaneJoinTokenSecretRef.Name != "" {
+			secretKey.Name = kairosConfig.Spec.ControlPlaneJoinTokenSecretRef.Name
+			if kairosConfig.Spec.ControlPlaneJoinTokenSecretRef.Namespace != "" {
+				secretKey.Namespace = kairosConfig.Spec.ControlPlaneJoinTokenSecretRef.Namespace
+			}
+			if kairosConfig.Spec.ControlPlaneJoinTokenSecretRef.Key != "" {
+				key = kairosConfig.Spec.ControlPlaneJoinTokenSecretRef.Key
+			}
 		}
 		secret := &corev1.Secret{}
 		if err := r.Get(ctx, secretKey, secret); err != nil {
+			if apierrors.IsNotFound(err) {
+				return "", errJoinTokenNotReady
+			}
 			return "", fmt.Errorf("failed to get control-plane join token secret %s/%s: %w", secretKey.Namespace, secretKey.Name, err)
-		}
-		key := kairosConfig.Spec.ControlPlaneJoinTokenSecretRef.Key
-		if key == "" {
-			key = "token"
 		}
 		if tokenData, ok := secret.Data[key]; ok {
 			controlPlaneJoinToken = string(tokenData)
@@ -844,6 +859,7 @@ func (r *KairosConfigReconciler) generateK0sCloudConfig(ctx context.Context, log
 
 	// Set install configuration (with defaults)
 	var installConfig *bootstrap.InstallConfig
+	needsInstaller := isKubevirtMachine(machine) || isVSphereMachine(machine)
 	if kairosConfig.Spec.Install != nil {
 		installConfig = &bootstrap.InstallConfig{
 			Auto:   true,   // Default to true
@@ -858,6 +874,12 @@ func (r *KairosConfigReconciler) generateK0sCloudConfig(ctx context.Context, log
 		}
 		if kairosConfig.Spec.Install.Reboot != nil {
 			installConfig.Reboot = *kairosConfig.Spec.Install.Reboot
+		}
+	} else if needsInstaller {
+		installConfig = &bootstrap.InstallConfig{
+			Auto:   true,
+			Device: "auto",
+			Reboot: true,
 		}
 	}
 

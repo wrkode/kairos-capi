@@ -195,7 +195,7 @@ func TestGenerateK0sCloudConfig_ControlPlaneJoin(t *testing.T) {
 
 	joinSecret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "cp-join-token",
+			Name:      "test-cluster-k0s-controller-join-token",
 			Namespace: "default",
 		},
 		Data: map[string][]byte{
@@ -220,12 +220,9 @@ func TestGenerateK0sCloudConfig_ControlPlaneJoin(t *testing.T) {
 			KubernetesVersion: "v1.30.0+k0s.0",
 			SingleNode:        false,
 			ControlPlaneMode:  bootstrapv1beta2.ControlPlaneModeJoin,
-			ControlPlaneJoinTokenSecretRef: &bootstrapv1beta2.ControlPlaneTokenSecretReference{
-				Name: "cp-join-token",
-			},
-			UserName:     "kairos",
-			UserPassword: "kairos",
-			UserGroups:   []string{"admin"},
+			UserName:          "kairos",
+			UserPassword:      "kairos",
+			UserGroups:        []string{"admin"},
 		},
 	}
 

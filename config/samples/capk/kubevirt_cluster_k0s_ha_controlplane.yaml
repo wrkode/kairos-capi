@@ -51,9 +51,6 @@ metadata:
 spec:
   replicas: 3
   version: "v1.34.1+k0s.1"
-  controlPlaneJoinTokenSecretRef:
-    name: kairos-control-plane-join-token
-    key: token
   machineTemplate:
     infrastructureRef:
       apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
@@ -141,7 +138,7 @@ spec:
       kubernetesVersion: "v1.34.1+k0s.1"
       install:
         auto: true
-        device: "/dev/vda"
+        device: "auto"
         reboot: true
       dnsServers:
         - "172.16.56.5"
@@ -158,15 +155,3 @@ spec:
       # githubUser: "your-github-username"
       # Optional: Add SSH public key instead
       # sshPublicKey: "ssh-rsa AAAAB3NzaC1yc2E..."
----
-# ============================================================================
-# Control-plane join token (REQUIRED for HA)
-# ============================================================================
-apiVersion: v1
-kind: Secret
-metadata:
-  name: kairos-control-plane-join-token
-  namespace: default
-type: Opaque
-stringData:
-  token: "your-controller-join-token" # TODO: Replace with your controller join token

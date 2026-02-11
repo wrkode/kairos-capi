@@ -32,10 +32,12 @@ Exactly one control-plane node performs cluster init. All other control-plane no
 
 ## Token management
 ### Control-plane join token
-Provided via a Secret reference in the cluster namespace:
-- `controlPlaneJoinTokenSecretRef` on `KairosControlPlaneSpec`
-- Controller copies it into each `KairosConfig` for join controllers
-- Key defaults to `token` when omitted
+For k0s HA, the join token is controller-generated and mirrored:
+- Init controller creates a workload Secret in `kairos-system/k0s-controller-join-token` with key `token`.
+- The management controller mirrors it into the Cluster namespace as `<cluster-name>-k0s-controller-join-token`.
+- Join controllers read the mirrored Secret and write `/etc/k0s/controller-token`.
+
+For future k3s HA, a user-provided Secret reference will be required (not implemented here).
 
 ### Worker token
 Unchanged:
