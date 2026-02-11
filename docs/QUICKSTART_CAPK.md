@@ -1,6 +1,6 @@
 # Quickstart: CAPK (KubeVirt)
 
-This guide sets up a local KubeVirt environment and provisions a single-node Kairos+k0s cluster using CAPK.
+This guide sets up a local KubeVirt environment and provisions a single-node Kairos+k0s or Kairos+k3s cluster using CAPK.
 
 ## Prerequisites
 - `docker`
@@ -37,6 +37,9 @@ Notes:
 ## Create a test cluster
 ```
 kubectl apply -f config/samples/capk/kairos_cluster_k0s_single_node.yaml
+
+# Or for k3s:
+# kubectl apply -f config/samples/capk/kubevirt_cluster_k3s_single_node.yaml
 ```
 
 ## Check status

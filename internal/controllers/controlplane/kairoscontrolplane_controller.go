@@ -497,6 +497,10 @@ func (r *KairosControlPlaneReconciler) createControlPlaneMachine(ctx context.Con
 	machineName := fmt.Sprintf("%s-%d", kcp.Name, index)
 
 	// Create KairosConfig
+	distribution := kcp.Spec.Distribution
+	if distribution == "" {
+		distribution = "k0s"
+	}
 	kairosConfig := &bootstrapv1beta2.KairosConfig{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      fmt.Sprintf("%s-%d", kcp.Name, index),
@@ -511,7 +515,7 @@ func (r *KairosControlPlaneReconciler) createControlPlaneMachine(ctx context.Con
 		},
 		Spec: bootstrapv1beta2.KairosConfigSpec{
 			Role:              "control-plane",
-			Distribution:      "k0s",
+			Distribution:      distribution,
 			KubernetesVersion: kcp.Spec.Version,
 		},
 	}
@@ -537,6 +541,7 @@ func (r *KairosControlPlaneReconciler) createControlPlaneMachine(ctx context.Con
 		// Merge template spec
 		kairosConfig.Spec = template.Spec.Template.Spec
 		kairosConfig.Spec.Role = "control-plane"
+		kairosConfig.Spec.Distribution = distribution
 		kairosConfig.Spec.KubernetesVersion = kcp.Spec.Version
 		// Override SingleNode based on replicas (replicas takes precedence)
 		kairosConfig.Spec.SingleNode = (replicas == 1)
@@ -882,12 +887,27 @@ func (r *KairosControlPlaneReconciler) reconcileKubeconfig(ctx context.Context, 
 	}
 
 	// Retrieve kubeconfig from the node
-	// For k0s, the kubeconfig is at /var/lib/k0s/pki/admin.conf
-	// We'll use the infrastructure provider to get the node IP and SSH into it
-	log.Info("Retrieving kubeconfig from node", "machine", readyMachine.Name)
-	kubeconfig, err := r.retrieveKubeconfigFromNode(ctx, log, readyMachine, cluster)
+	// For k0s: k0s kubeconfig admin (from /var/lib/k0s/pki/admin.conf)
+	// For k3s: cat /etc/rancher/k3s/k3s.yaml
+	log.Info("Retrieving kubeconfig from node", "machine", readyMachine.Name, "distribution", kcp.Spec.Distribution)
+	kubeconfig, err := r.retrieveKubeconfigFromNode(ctx, log, kcp, readyMachine, cluster)
 	if err != nil {
 		return fmt.Errorf("failed to retrieve kubeconfig from node: %w", err)
+	}
+
+	// k3s default kubeconfig uses https://127.0.0.1:6443 - update to node IP so management cluster can connect
+	if kcp.Spec.Distribution == "k3s" {
+		nodeIP, nodeErr := r.getNodeIP(ctx, log, readyMachine)
+		sshHost, hostErr := resolveSSHHost(readyMachine, cluster, nodeIP, nodeErr, log)
+		if hostErr == nil && sshHost != "" {
+			updated, updateErr := updateKubeconfigServerToNodeIP(kubeconfig, sshHost, 6443)
+			if updateErr != nil {
+				log.Error(updateErr, "Failed to update kubeconfig server for k3s, using as-is")
+			} else {
+				kubeconfig = updated
+				log.Info("Updated k3s kubeconfig server to node IP", "nodeIP", sshHost)
+			}
+		}
 	}
 
 	// Create or update the kubeconfig secret
@@ -1079,8 +1099,9 @@ func (r *KairosControlPlaneReconciler) getInfrastructureProviderID(ctx context.C
 }
 
 // retrieveKubeconfigFromNode retrieves the kubeconfig from a control plane node
-// For VSphere/CAPK, this SSHes into the VM and runs `k0s kubeconfig admin`
-func (r *KairosControlPlaneReconciler) retrieveKubeconfigFromNode(ctx context.Context, log logr.Logger, machine *clusterv1.Machine, cluster *clusterv1.Cluster) ([]byte, error) {
+// For k0s: runs `k0s kubeconfig admin` (from /var/lib/k0s/pki/admin.conf)
+// For k3s: runs `cat /etc/rancher/k3s/k3s.yaml`
+func (r *KairosControlPlaneReconciler) retrieveKubeconfigFromNode(ctx context.Context, log logr.Logger, kcp *controlplanev1beta2.KairosControlPlane, machine *clusterv1.Machine, cluster *clusterv1.Cluster) ([]byte, error) {
 	// Get node IP from infrastructure provider
 	nodeIP, nodeErr := r.getNodeIP(ctx, log, machine)
 	sshHost, err := resolveSSHHost(machine, cluster, nodeIP, nodeErr, log)
@@ -1088,7 +1109,7 @@ func (r *KairosControlPlaneReconciler) retrieveKubeconfigFromNode(ctx context.Co
 		return nil, fmt.Errorf("failed to resolve SSH host: %w", err)
 	}
 
-	log.Info("Retrieving kubeconfig from node", "nodeIP", sshHost)
+	log.Info("Retrieving kubeconfig from node", "nodeIP", sshHost, "distribution", kcp.Spec.Distribution)
 
 	// Get SSH credentials from KairosConfig
 	userName, userPassword, err := r.getSSHCredentials(ctx, log, machine)
@@ -1096,13 +1117,26 @@ func (r *KairosControlPlaneReconciler) retrieveKubeconfigFromNode(ctx context.Co
 		return nil, fmt.Errorf("failed to get SSH credentials: %w", err)
 	}
 
-	// SSH into the node and run k0s kubeconfig admin
-	kubeconfig, err := r.executeK0sKubeconfigCommand(ctx, log, sshHost, userName, userPassword)
-	if err != nil {
-		return nil, fmt.Errorf("failed to execute k0s kubeconfig command: %w", err)
+	distribution := kcp.Spec.Distribution
+	if distribution == "" {
+		distribution = "k0s"
 	}
 
-	log.Info("Successfully retrieved kubeconfig", "nodeIP", sshHost, "kubeconfigSize", len(kubeconfig))
+	var kubeconfig []byte
+	switch distribution {
+	case "k3s":
+		kubeconfig, err = r.executeK3sKubeconfigCommand(ctx, log, sshHost, userName, userPassword)
+		if err != nil {
+			return nil, fmt.Errorf("failed to execute k3s kubeconfig command: %w", err)
+		}
+	default:
+		kubeconfig, err = r.executeK0sKubeconfigCommand(ctx, log, sshHost, userName, userPassword)
+		if err != nil {
+			return nil, fmt.Errorf("failed to execute k0s kubeconfig command: %w", err)
+		}
+	}
+
+	log.Info("Successfully retrieved kubeconfig", "nodeIP", sshHost, "distribution", distribution, "kubeconfigSize", len(kubeconfig))
 	return kubeconfig, nil
 }
 
@@ -1498,6 +1532,132 @@ func (r *KairosControlPlaneReconciler) executeK0sKubeconfigCommand(ctx context.C
 	return nil, fmt.Errorf("k0s kubeconfig command returned empty output")
 }
 
+// checkK3sReady checks if k3s is ready by verifying the service is running and k3s.yaml exists
+func (r *KairosControlPlaneReconciler) checkK3sReady(ctx context.Context, log logr.Logger, client *ssh.Client) error {
+	// Check if k3s service is running (k3s server uses "k3s" service name)
+	checkCommands := []string{
+		"sudo -n systemctl is-active k3s",
+		"sudo systemctl is-active k3s",
+		"systemctl is-active k3s",
+	}
+
+	for _, cmd := range checkCommands {
+		session, err := client.NewSession()
+		if err != nil {
+			continue
+		}
+
+		var stdout, stderr bytes.Buffer
+		session.Stdout = &stdout
+		session.Stderr = &stderr
+
+		err = session.Run(cmd)
+		session.Close()
+
+		if err == nil {
+			output := stdout.String()
+			if output == "active\n" || output == "active" {
+				log.V(4).Info("k3s service is active")
+				// Also check if k3s.yaml exists
+				checkFileCmd := "sudo -n test -f /etc/rancher/k3s/k3s.yaml || sudo test -f /etc/rancher/k3s/k3s.yaml || test -f /etc/rancher/k3s/k3s.yaml"
+				fileSession, err := client.NewSession()
+				if err == nil {
+					err = fileSession.Run(checkFileCmd)
+					fileSession.Close()
+					if err == nil {
+						log.V(4).Info("k3s kubeconfig file exists")
+						return nil
+					}
+				}
+				log.V(4).Info("k3s service is active but k3s.yaml not found yet, k3s may still be initializing")
+				return fmt.Errorf("k3s is running but k3s.yaml not found yet - k3s may still be initializing")
+			}
+		}
+	}
+
+	return fmt.Errorf("k3s service is not active")
+}
+
+// executeK3sKubeconfigCommand SSHes into the node and runs `cat /etc/rancher/k3s/k3s.yaml`
+func (r *KairosControlPlaneReconciler) executeK3sKubeconfigCommand(ctx context.Context, log logr.Logger, nodeIP, userName, userPassword string) ([]byte, error) {
+	config := &ssh.ClientConfig{
+		User: userName,
+		Auth: []ssh.AuthMethod{
+			ssh.Password(userPassword),
+		},
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		Timeout:         30 * time.Second,
+	}
+
+	address := net.JoinHostPort(nodeIP, "22")
+	log.V(4).Info("Connecting to node via SSH", "address", address)
+
+	client, err := ssh.Dial("tcp", address, config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to dial SSH: %w", err)
+	}
+	defer client.Close()
+
+	if err := r.checkK3sReady(ctx, log, client); err != nil {
+		return nil, fmt.Errorf("k3s is not ready yet: %w", err)
+	}
+
+	// k3s kubeconfig is at /etc/rancher/k3s/k3s.yaml
+	commands := []string{
+		"sudo -n cat /etc/rancher/k3s/k3s.yaml",
+		"sudo cat /etc/rancher/k3s/k3s.yaml",
+		"cat /etc/rancher/k3s/k3s.yaml",
+	}
+
+	commandCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+
+	var output []byte
+	var lastErr error
+
+	for _, cmd := range commands {
+		log.V(4).Info("Trying k3s kubeconfig command", "command", cmd)
+
+		session, err := client.NewSession()
+		if err != nil {
+			return nil, fmt.Errorf("failed to create SSH session: %w", err)
+		}
+
+		var stdout, stderr bytes.Buffer
+		session.Stdout = &stdout
+		session.Stderr = &stderr
+
+		done := make(chan error, 1)
+		go func() {
+			done <- session.Run(cmd)
+		}()
+
+		select {
+		case err := <-done:
+			session.Close()
+			if err == nil {
+				output = stdout.Bytes()
+				if len(output) > 0 {
+					log.Info("Successfully retrieved k3s kubeconfig", "command", cmd, "size", len(output))
+					return output, nil
+				}
+			} else {
+				lastErr = fmt.Errorf("command '%s' failed: %w, stderr: %s", cmd, err, stderr.String())
+				log.V(4).Info("Command failed, trying next", "command", cmd, "error", err)
+			}
+		case <-commandCtx.Done():
+			session.Close()
+			lastErr = fmt.Errorf("timeout waiting for kubeconfig command: %s", cmd)
+			log.V(4).Info("Command timed out, trying next", "command", cmd)
+		}
+	}
+
+	if lastErr != nil {
+		return nil, fmt.Errorf("all k3s kubeconfig commands failed, last error: %w", lastErr)
+	}
+	return nil, fmt.Errorf("k3s kubeconfig command returned empty output")
+}
+
 // updateClusterStatus updates the Cluster status based on control plane readiness
 func (r *KairosControlPlaneReconciler) updateClusterStatus(ctx context.Context, log logr.Logger, kcp *controlplanev1beta2.KairosControlPlane, cluster *clusterv1.Cluster) error {
 	// Check if kubeconfig secret exists
@@ -1798,6 +1958,44 @@ func (r *KairosControlPlaneReconciler) getControlPlaneLBEndpoint(ctx context.Con
 	}
 
 	return host, port, nil
+}
+
+// updateKubeconfigServerToNodeIP replaces 127.0.0.1/localhost in kubeconfig server with the node IP.
+// k3s default kubeconfig uses https://127.0.0.1:6443 which is not reachable from the management cluster.
+func updateKubeconfigServerToNodeIP(kubeconfig []byte, nodeIP string, port int32) ([]byte, error) {
+	if nodeIP == "" || port == 0 {
+		return kubeconfig, nil
+	}
+	config, err := clientcmd.Load(kubeconfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse kubeconfig: %w", err)
+	}
+	desired := fmt.Sprintf("https://%s:%d", nodeIP, port)
+	changed := false
+	for _, cluster := range config.Clusters {
+		if cluster == nil {
+			continue
+		}
+		parsed, err := url.Parse(cluster.Server)
+		if err != nil {
+			cluster.Server = desired
+			changed = true
+			continue
+		}
+		// Replace 127.0.0.1 or localhost with node IP
+		if parsed.Hostname() == "127.0.0.1" || parsed.Hostname() == "localhost" {
+			cluster.Server = desired
+			changed = true
+		}
+	}
+	if !changed {
+		return kubeconfig, nil
+	}
+	out, err := clientcmd.Write(*config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to serialize kubeconfig: %w", err)
+	}
+	return out, nil
 }
 
 // ensureKubeconfigServer updates the kubeconfig secret server to match the given endpoint.

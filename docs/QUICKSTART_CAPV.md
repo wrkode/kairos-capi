@@ -1,6 +1,6 @@
 # Quick Start Guide - CAPV (vSphere)
 
-This guide walks you through creating a single-node k0s cluster on Kairos using Cluster API with the vSphere provider (CAPV).
+This guide walks you through creating a single-node k0s or k3s cluster on Kairos using Cluster API with the vSphere provider (CAPV).
 
 ## Prerequisites
 
@@ -130,7 +130,10 @@ Before applying the manifest, ensure you have:
 
 ### Step 2: Customize the Sample Manifest
 
-Edit `config/samples/capv/kairos_cluster_k0s_single_node.yaml`:
+Edit the sample manifest you want to use:
+
+- k0s single node: `config/samples/capv/kairos_cluster_k0s_single_node.yaml`
+- k3s single node: `config/samples/capv/kairos_cluster_k3s_single_node.yaml`
 
 #### Update Cluster
 
@@ -248,6 +251,9 @@ spec:
 
 ```bash
 kubectl apply -f config/samples/capv/kairos_cluster_k0s_single_node.yaml
+
+# Or for k3s:
+# kubectl apply -f config/samples/capv/kairos_cluster_k3s_single_node.yaml
 ```
 
 ### Step 4: Monitor Cluster Creation
