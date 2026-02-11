@@ -248,9 +248,11 @@ func (r *KairosControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.R
 			isTransientError := false
 			retryDelay := 30 * time.Second // Default retry delay
 
-			// Check for transient errors that indicate k0s is not ready yet or VM is rebooting
+			// Check for transient errors that indicate k0s/k3s is not ready yet or VM is rebooting
 			if strings.Contains(errMsg, "k0s is not ready") ||
 				strings.Contains(errMsg, "k0s service is not active") ||
+				strings.Contains(errMsg, "k3s is not ready") ||
+				strings.Contains(errMsg, "k3s service is not active") ||
 				(strings.Contains(errMsg, "admin config") && strings.Contains(errMsg, "not found")) ||
 				strings.Contains(errMsg, "connection refused") ||
 				(strings.Contains(errMsg, "dial") && strings.Contains(errMsg, "failed")) ||
@@ -264,7 +266,7 @@ func (r *KairosControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.R
 
 			if isTransientError {
 				// Requeue with delay to retry later
-				// This allows k0s to finish initializing after Kairos reboots
+				// This allows k0s/k3s to finish initializing after Kairos reboots
 				log.Info("Requeuing kubeconfig retrieval due to transient error",
 					"readyReplicas", kcp.Status.ReadyReplicas,
 					"initialized", kcp.Status.Initialized,
@@ -984,6 +986,8 @@ func (r *KairosControlPlaneReconciler) ensureProviderIDOnNodes(ctx context.Conte
 		return fmt.Errorf("failed to list workload nodes: %w", err)
 	}
 
+	singleNodeFallback := len(machines) == 1 && len(nodeList.Items) == 1
+
 	for _, machine := range machines {
 		providerID := ""
 		if machine.Spec.ProviderID != nil {
@@ -993,6 +997,7 @@ func (r *KairosControlPlaneReconciler) ensureProviderIDOnNodes(ctx context.Conte
 			providerID = r.getInfrastructureProviderID(ctx, log, machine)
 		}
 		if providerID == "" {
+			log.V(4).Info("Skipping providerID patch: no providerID for machine", "machine", machine.Name)
 			continue
 		}
 		if machine.Status.NodeRef != nil {
@@ -1012,20 +1017,26 @@ func (r *KairosControlPlaneReconciler) ensureProviderIDOnNodes(ctx context.Conte
 				log.V(4).Info("Failed to get node IP for providerID patch", "machine", machine.Name, "error", err)
 			}
 		}
-		if len(addressSet) == 0 {
-			continue
-		}
 
+		var nodeToPatch *corev1.Node
 		for i := range nodeList.Items {
 			node := &nodeList.Items[i]
-			matches := false
-			for _, addr := range node.Status.Addresses {
-				if _, ok := addressSet[addr.Address]; ok {
-					matches = true
-					break
+			if len(addressSet) > 0 {
+				matches := false
+				for _, addr := range node.Status.Addresses {
+					if _, ok := addressSet[addr.Address]; ok {
+						matches = true
+						break
+					}
 				}
-			}
-			if !matches {
+				if !matches {
+					continue
+				}
+			} else if singleNodeFallback {
+				// Single-node fallback: when exactly 1 machine and 1 node, match them
+				// (e.g. k3s may use different address formats than CAPV reports)
+				log.Info("Using single-node fallback to match machine to node", "machine", machine.Name, "node", node.Name)
+			} else {
 				continue
 			}
 
@@ -1033,18 +1044,28 @@ func (r *KairosControlPlaneReconciler) ensureProviderIDOnNodes(ctx context.Conte
 				log.V(4).Info("Node already has providerID", "node", node.Name, "providerID", node.Spec.ProviderID)
 				break
 			}
+			// Kubernetes forbids changing providerID once set; only empty -> valid is allowed
+			if node.Spec.ProviderID != "" {
+				log.V(4).Info("Node already has providerID (immutable), skipping patch",
+					"node", node.Name, "existingProviderID", node.Spec.ProviderID, "machineProviderID", providerID)
+				break
+			}
 
-			patchBase := node.DeepCopy()
-			node.Spec.ProviderID = providerID
-			if err := workloadClient.Patch(ctx, node, client.MergeFrom(patchBase)); err != nil {
+			nodeToPatch = node
+			break
+		}
+
+		if nodeToPatch != nil {
+			patchBase := nodeToPatch.DeepCopy()
+			nodeToPatch.Spec.ProviderID = providerID
+			if err := workloadClient.Patch(ctx, nodeToPatch, client.MergeFrom(patchBase)); err != nil {
 				return fmt.Errorf("failed to patch node providerID: %w", err)
 			}
 
 			log.Info("Patched workload node providerID",
-				"node", node.Name,
-				"providerID", node.Spec.ProviderID,
+				"node", nodeToPatch.Name,
+				"providerID", nodeToPatch.Spec.ProviderID,
 				"machine", machine.Name)
-			break
 		}
 	}
 
