@@ -57,8 +57,14 @@ users:
 {{- if eq .Role "control-plane" }}
 
 # Control-plane node configuration
+# Pass providerID at k3s startup so node registers with correct providerID (avoids k3s:// vs kubevirt:// mismatch)
+# Use both k3s.args (Kairos) and config file drop-in (k3s loads /etc/rancher/k3s/config.yaml.d/*.yaml on every start)
 k3s:
   enabled: true
+  {{- if .ProviderID }}
+  args:
+    - --kubelet-arg=provider-id={{ .ProviderID }}
+  {{- end }}
 
 {{- else }}
 
@@ -73,6 +79,16 @@ k3s-agent:
 
 {{- /* write_files: worker token + post-bootstrap service/script (like k0s CAPK) */}}
 write_files:
+  {{- if and (eq .Role "control-plane") .ProviderID }}
+  - path: /etc/rancher/k3s/config.yaml.d/90-provider-id.yaml
+    permissions: "0644"
+    owner: 0
+    group: 0
+    content: |
+      # ProviderID for CAPI/CAPK node matching (k3s loads this on every start)
+      kubelet-arg:
+        - provider-id={{ .ProviderID }}
+  {{- end }}
   {{- if and (ne .Role "control-plane") .K3sToken }}
   - path: /etc/rancher/k3s/token
     permissions: "0644"
@@ -113,6 +129,65 @@ write_files:
       
       [Install]
       WantedBy=multi-user.target
+  {{- if eq .Role "control-plane" }}
+  # Systemd override + wrapper: guarantees providerID is passed to k3s at startup.
+  # When ProviderID is set: ExecStartPre writes it before k3s starts.
+  # When ProviderID is not set: discovery script (boot stage) populates /run/kairos-k3s/provider_id.
+  - path: /usr/local/bin/kairos-k3s-server-wrapper.sh
+    permissions: "0755"
+    owner: 0
+    group: 0
+    content: |
+      #!/bin/bash
+      set -e
+      EXTRA_ARGS=""
+      if [ -f /run/kairos-k3s/provider_id ]; then
+        PROVIDER_ID=$(cat /run/kairos-k3s/provider_id)
+        if [ -n "$PROVIDER_ID" ]; then
+          EXTRA_ARGS="--kubelet-arg=provider-id=$PROVIDER_ID"
+        fi
+      fi
+      exec /usr/local/bin/k3s server "$@" $EXTRA_ARGS
+  - path: /etc/systemd/system/k3s.service.d/10-provider-id.conf
+    permissions: "0644"
+    owner: 0
+    group: 0
+    content: |
+      [Service]
+      {{- if .ProviderID }}
+      ExecStartPre=/bin/sh -c 'mkdir -p /run/kairos-k3s && echo "{{ .ProviderID }}" > /run/kairos-k3s/provider_id'
+      {{- end }}
+      ExecStart=
+      ExecStart=/usr/local/bin/kairos-k3s-server-wrapper.sh server
+  {{- end }}
+  {{- if and (eq .Role "control-plane") (not .ProviderID) }}
+  # VM self-discovery of providerID when not available at bootstrap (runs before k3s)
+  - path: /usr/local/bin/kairos-k3s-discover-provider-id.sh
+    permissions: "0755"
+    owner: 0
+    group: 0
+    content: |
+      #!/bin/bash
+      set -e
+      mkdir -p /run/kairos-k3s
+      # Try DMI product_uuid first (KubeVirt VMs may expose UUID)
+      if [ -f /sys/class/dmi/id/product_uuid ]; then
+        RAW=$(cat /sys/class/dmi/id/product_uuid | tr -d ' \n\r')
+        HEX=$(echo "$RAW" | tr -d '-' | tr '[:upper:]' '[:lower:]')
+        if [ -n "$HEX" ] && [ ${#HEX} -eq 32 ]; then
+          FORMATTED="${HEX:0:8}-${HEX:8:4}-${HEX:12:4}-${HEX:16:4}-${HEX:20:12}"
+          echo "kubevirt://${FORMATTED}" > /run/kairos-k3s/provider_id
+          echo "Discovered providerID: kubevirt://${FORMATTED}"
+        fi
+      fi
+      # Fallback: CAPK often uses kubevirt://namespace/vm-name (hostname usually matches vm name)
+      {{- if and .ClusterNS .Hostname }}
+      if [ ! -s /run/kairos-k3s/provider_id ]; then
+        echo "kubevirt://{{ .ClusterNS }}/{{ .Hostname }}" > /run/kairos-k3s/provider_id
+        echo "Discovered providerID: kubevirt://{{ .ClusterNS }}/{{ .Hostname }}"
+      fi
+      {{- end }}
+  {{- end }}
   - path: /usr/local/bin/kairos-k3s-post-bootstrap.sh
     permissions: "0755"
     owner: 0
@@ -156,36 +231,40 @@ MANIFEST_EOF
       {{- end }}
       
       {{- if .ProviderID }}
-      # Wait for k3s API to be ready
-      echo "Waiting for k3s API to be ready..."
+      # Fallback: post-bootstrap providerID patch (same approach as k0s CAPK single-node)
+      # If k3s registered with k3s://hostname, providerID is immutable and patch will fail - that's expected.
+      # If node has empty providerID, patch will succeed and unblock Machine-to-Node matching.
+      echo "Waiting for k3s node to be registered..."
       export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
-      for i in {1..60}; do
-        if [ -f /etc/rancher/k3s/k3s.yaml ] && k3s kubectl get --raw /readyz &>/dev/null; then
+      MAX_WAIT=300
+      ELAPSED=0
+      while ! kubectl get node $(hostname) &>/dev/null; do
+        if [ $ELAPSED -ge $MAX_WAIT ]; then
+          echo "WARN: Timeout waiting for node to be registered (providerID patch skipped)"
           break
         fi
-        echo "Waiting for k3s API... (${i}/60)"
+        echo "Waiting for node to be registered... (${ELAPSED}s/${MAX_WAIT}s)"
         sleep 5
+        ELAPSED=$((ELAPSED + 5))
       done
       
-      # Set providerID on the Node
-      echo "Setting providerID={{ .ProviderID }} on node $(hostname)..."
-      PROVIDER_ID_SET=false
-      for i in {1..30}; do
-        if k3s kubectl patch node $(hostname) --type=merge -p '{"spec":{"providerID":"{{ .ProviderID }}"}}' &>/dev/null; then
-          echo "Successfully set providerID={{ .ProviderID }} on node $(hostname)"
-          PROVIDER_ID_SET=true
-          break
-        fi
-        echo "Attempt $i/30: Failed to set providerID, retrying in 5 seconds..."
-        sleep 5
-      done
-      
-      if [ "$PROVIDER_ID_SET" != "true" ]; then
-        echo "ERROR: Failed to set providerID after 30 attempts"
-        exit 1
+      if kubectl get node $(hostname) &>/dev/null; then
+        echo "Attempting to set providerID={{ .ProviderID }} on node $(hostname)..."
+        for i in $(seq 1 30); do
+          if kubectl patch node $(hostname) --type=merge -p '{"spec":{"providerID":"{{ .ProviderID }}"}}' 2>/dev/null; then
+            echo "Successfully set providerID={{ .ProviderID }} on node $(hostname)"
+            break
+          fi
+          # If node already has providerID (immutable), patch fails - don't retry
+          CURRENT=$(kubectl get node $(hostname) -o jsonpath='{.spec.providerID}' 2>/dev/null || echo "")
+          if [ -n "$CURRENT" ]; then
+            echo "Node already has providerID=$CURRENT (immutable), skipping patch"
+            break
+          fi
+          echo "Attempt $i/30: Failed to set providerID, retrying in 5 seconds..."
+          sleep 5
+        done
       fi
-      {{- else }}
-      echo "No providerID to set"
       {{- end }}
       
       # Mark bootstrap success for CAPI/CAPK consumers
@@ -198,6 +277,11 @@ MANIFEST_EOF
 {{- /* DNS overrides and bootstrap stages */}}
 stages:
   boot:
+    {{- if and (eq .Role "control-plane") (not .ProviderID) }}
+    - name: "Discover providerID for k3s (VM self-discovery)"
+      commands:
+        - /usr/local/bin/kairos-k3s-discover-provider-id.sh || true
+    {{- end }}
     - name: "Ensure SSH service is enabled"
       commands:
         - systemctl enable --now sshd || systemctl enable --now ssh || true
@@ -216,6 +300,7 @@ stages:
     - name: "Ensure k3s directories exist"
       commands:
         - mkdir -p /etc/rancher/k3s
+        - mkdir -p /etc/rancher/k3s/config.yaml.d
     {{- if .DNSServers }}
     - name: "Configure DNS resolvers for early boot"
       dns:

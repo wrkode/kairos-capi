@@ -293,6 +293,69 @@ func TestRenderK3sCloudConfig_Worker(t *testing.T) {
 	}
 }
 
+func TestRenderK3sCloudConfig_ControlPlaneWithProviderID(t *testing.T) {
+	data := TemplateData{
+		Role:         "control-plane",
+		SingleNode:   true,
+		Hostname:     "kairos-control-plane-k3s-0",
+		ProviderID:   "vsphere://422fa74a-5d60-3a4a-af24-1f07be515fcc",
+		UserName:     "kairos",
+		UserPassword: "kairos",
+		UserGroups:   []string{"admin"},
+	}
+
+	result, err := RenderK3sCloudConfig(data)
+	if err != nil {
+		t.Fatalf("Failed to render template: %v", err)
+	}
+
+	if !strings.Contains(result, "--kubelet-arg=provider-id=vsphere://422fa74a-5d60-3a4a-af24-1f07be515fcc") {
+		t.Error("Missing providerID in k3s args when ProviderID is set")
+	}
+	if !strings.Contains(result, "/etc/rancher/k3s/config.yaml.d/90-provider-id.yaml") {
+		t.Error("Missing k3s config file drop-in for providerID when ProviderID is set")
+	}
+	if !strings.Contains(result, "kubectl patch node $(hostname)") {
+		t.Error("Missing k0s-style post-bootstrap providerID patch when ProviderID is set")
+	}
+	if !strings.Contains(result, "ExecStartPre=") {
+		t.Error("Missing ExecStartPre in systemd override when ProviderID is set (writes provider_id before k3s)")
+	}
+	if !strings.Contains(result, "kairos-k3s-server-wrapper.sh") {
+		t.Error("Missing k3s server wrapper when ProviderID is set")
+	}
+	if strings.Contains(result, "kairos-k3s-discover-provider-id.sh") {
+		t.Error("Should not have discovery script when ProviderID is set")
+	}
+}
+
+func TestRenderK3sCloudConfig_ControlPlaneWithoutProviderID(t *testing.T) {
+	data := TemplateData{
+		Role:           "control-plane",
+		SingleNode:     true,
+		Hostname:       "kairos-control-plane-k3s-0",
+		UserName:       "kairos",
+		UserPassword:   "kairos",
+		UserGroups:     []string{"admin"},
+		HostnamePrefix: "metal-",
+	}
+
+	result, err := RenderK3sCloudConfig(data)
+	if err != nil {
+		t.Fatalf("Failed to render template: %v", err)
+	}
+
+	if !strings.Contains(result, "kairos-k3s-discover-provider-id.sh") {
+		t.Error("Missing providerID discovery script when ProviderID is not set")
+	}
+	if !strings.Contains(result, "kairos-k3s-server-wrapper.sh") {
+		t.Error("Missing k3s server wrapper when ProviderID is not set")
+	}
+	if !strings.Contains(result, "10-provider-id.conf") {
+		t.Error("Missing systemd override when ProviderID is not set")
+	}
+}
+
 func TestRenderK0sCloudConfig_CapvTemplateExcludesCapkBlocks(t *testing.T) {
 	data := TemplateData{
 		Role:         "control-plane",
