@@ -130,38 +130,24 @@ write_files:
       [Install]
       WantedBy=multi-user.target
   {{- if eq .Role "control-plane" }}
-  # Systemd override + wrapper: guarantees providerID is passed to k3s at startup.
-  # When ProviderID is set: ExecStartPre writes it before k3s starts.
-  # When ProviderID is not set: discovery script (boot stage) populates /run/kairos-k3s/provider_id.
-  - path: /usr/local/bin/kairos-k3s-server-wrapper.sh
-    permissions: "0755"
-    owner: 0
-    group: 0
-    content: |
-      #!/bin/bash
-      set -e
-      EXTRA_ARGS=""
-      if [ -f /run/kairos-k3s/provider_id ]; then
-        PROVIDER_ID=$(cat /run/kairos-k3s/provider_id)
-        if [ -n "$PROVIDER_ID" ]; then
-          EXTRA_ARGS="--kubelet-arg=provider-id=$PROVIDER_ID"
-        fi
-      fi
-      exec /usr/local/bin/k3s server "$@" $EXTRA_ARGS
-  - path: /etc/systemd/system/k3s.service.d/10-provider-id.conf
+  # Systemd override: write providerID to k3s config before k3s starts.
+  # k3s loads /etc/rancher/k3s/config.yaml.d/*.yaml at startup - more reliable than wrapper.
+  # Use z-provider-id.conf so it loads after override.conf (Kairos/other configs).
+  - path: /etc/systemd/system/k3s.service.d/z-provider-id.conf
     permissions: "0644"
     owner: 0
     group: 0
     content: |
       [Service]
       {{- if .ProviderID }}
-      ExecStartPre=/bin/sh -c 'mkdir -p /run/kairos-k3s && echo "{{ .ProviderID }}" > /run/kairos-k3s/provider_id'
+      ExecStartPre=/bin/sh -c 'mkdir -p /etc/rancher/k3s/config.yaml.d && printf "kubelet-arg:\n  - provider-id={{ .ProviderID }}\n" > /etc/rancher/k3s/config.yaml.d/90-provider-id.yaml'
+      {{- else }}
+      ExecStartPre=/bin/sh -c '/usr/local/bin/kairos-k3s-discover-provider-id.sh || true'
       {{- end }}
-      ExecStart=
-      ExecStart=/usr/local/bin/kairos-k3s-server-wrapper.sh server
   {{- end }}
   {{- if and (eq .Role "control-plane") (not .ProviderID) }}
-  # VM self-discovery of providerID when not available at bootstrap (runs before k3s)
+  # VM self-discovery of providerID when not available at bootstrap (runs before k3s via ExecStartPre)
+  # Writes to k3s config file - k3s loads config.yaml.d/*.yaml at startup
   - path: /usr/local/bin/kairos-k3s-discover-provider-id.sh
     permissions: "0755"
     owner: 0
@@ -169,24 +155,28 @@ write_files:
     content: |
       #!/bin/bash
       set -e
-      mkdir -p /run/kairos-k3s
+      PROVIDER_ID=""
       # Try DMI product_uuid first (KubeVirt VMs may expose UUID)
       if [ -f /sys/class/dmi/id/product_uuid ]; then
         RAW=$(cat /sys/class/dmi/id/product_uuid | tr -d ' \n\r')
         HEX=$(echo "$RAW" | tr -d '-' | tr '[:upper:]' '[:lower:]')
         if [ -n "$HEX" ] && [ ${#HEX} -eq 32 ]; then
           FORMATTED="${HEX:0:8}-${HEX:8:4}-${HEX:12:4}-${HEX:16:4}-${HEX:20:12}"
-          echo "kubevirt://${FORMATTED}" > /run/kairos-k3s/provider_id
-          echo "Discovered providerID: kubevirt://${FORMATTED}"
+          PROVIDER_ID="kubevirt://${FORMATTED}"
+          echo "Discovered providerID: $PROVIDER_ID"
         fi
       fi
       # Fallback: CAPK often uses kubevirt://namespace/vm-name (hostname usually matches vm name)
       {{- if and .ClusterNS .Hostname }}
-      if [ ! -s /run/kairos-k3s/provider_id ]; then
-        echo "kubevirt://{{ .ClusterNS }}/{{ .Hostname }}" > /run/kairos-k3s/provider_id
-        echo "Discovered providerID: kubevirt://{{ .ClusterNS }}/{{ .Hostname }}"
+      if [ -z "$PROVIDER_ID" ]; then
+        PROVIDER_ID="kubevirt://{{ .ClusterNS }}/{{ .Hostname }}"
+        echo "Discovered providerID: $PROVIDER_ID (fallback)"
       fi
       {{- end }}
+      if [ -n "$PROVIDER_ID" ]; then
+        mkdir -p /etc/rancher/k3s/config.yaml.d
+        printf "kubelet-arg:\n  - provider-id=%s\n" "$PROVIDER_ID" > /etc/rancher/k3s/config.yaml.d/90-provider-id.yaml
+      fi
   {{- end }}
   - path: /usr/local/bin/kairos-k3s-post-bootstrap.sh
     permissions: "0755"
