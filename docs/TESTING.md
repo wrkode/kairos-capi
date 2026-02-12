@@ -1,5 +1,7 @@
 # Testing
 
+See [Install guide](INSTALL.md) for development install.
+
 ## Unit tests
 
 Run unit tests (default, no envtest assets needed):
