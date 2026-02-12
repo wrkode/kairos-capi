@@ -1,6 +1,6 @@
 # Kairos CAPI Provider
 
-Cluster API providers for Kairos OS. This project is under active development.
+**Cluster API providers for Kairos OS. This project is under active development.**
 
 ## Overview
 

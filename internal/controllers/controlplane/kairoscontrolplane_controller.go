@@ -1114,6 +1114,20 @@ func (r *KairosControlPlaneReconciler) getInfrastructureProviderID(ctx context.C
 		if providerID, found, err := unstructured.NestedString(kubevirtMachine.Object, "spec", "providerID"); err == nil && found && providerID != "" {
 			return providerID
 		}
+	case "DockerMachine":
+		dockerMachine := &unstructured.Unstructured{}
+		dockerMachine.SetGroupVersionKind(machine.Spec.InfrastructureRef.GroupVersionKind())
+		dockerMachineKey := types.NamespacedName{
+			Name:      machine.Spec.InfrastructureRef.Name,
+			Namespace: machine.Spec.InfrastructureRef.Namespace,
+		}
+		if err := r.Get(ctx, dockerMachineKey, dockerMachine); err != nil {
+			log.V(4).Info("Failed to get DockerMachine for providerID", "machine", machine.Name, "error", err)
+			return ""
+		}
+		if providerID, found, err := unstructured.NestedString(dockerMachine.Object, "spec", "providerID"); err == nil && found && providerID != "" {
+			return providerID
+		}
 	}
 
 	return ""
@@ -1162,7 +1176,7 @@ func (r *KairosControlPlaneReconciler) retrieveKubeconfigFromNode(ctx context.Co
 }
 
 // getNodeIP retrieves the node IP from the infrastructure provider.
-// Supports VSphere (VSphereMachine/VSphereVM) and CAPK (KubevirtMachine).
+// Supports CAPD (DockerMachine), CAPV (VSphereMachine/VSphereVM), and CAPK (KubevirtMachine).
 func (r *KairosControlPlaneReconciler) getNodeIP(ctx context.Context, log logr.Logger, machine *clusterv1.Machine) (string, error) {
 	switch machine.Spec.InfrastructureRef.Kind {
 	case "VSphereMachine":
@@ -1226,6 +1240,20 @@ func (r *KairosControlPlaneReconciler) getNodeIP(ctx context.Context, log logr.L
 		}
 
 		return "", fmt.Errorf("no IP address found in KubevirtMachine status")
+	case "DockerMachine":
+		dockerMachine := &unstructured.Unstructured{}
+		dockerMachine.SetGroupVersionKind(machine.Spec.InfrastructureRef.GroupVersionKind())
+		dockerMachineKey := types.NamespacedName{
+			Name:      machine.Spec.InfrastructureRef.Name,
+			Namespace: machine.Spec.InfrastructureRef.Namespace,
+		}
+		if err := r.Get(ctx, dockerMachineKey, dockerMachine); err != nil {
+			return "", fmt.Errorf("failed to get DockerMachine: %w", err)
+		}
+		if ip := r.extractIPFromUnstructured(dockerMachine); ip != "" {
+			return ip, nil
+		}
+		return "", fmt.Errorf("no IP address found in DockerMachine status")
 	default:
 		return "", fmt.Errorf("unsupported infrastructure provider: %s", machine.Spec.InfrastructureRef.Kind)
 	}

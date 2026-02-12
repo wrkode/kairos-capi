@@ -1608,5 +1608,23 @@ func (r *KairosConfigReconciler) getProviderID(ctx context.Context, log logr.Log
 		}
 	}
 
+	// For CAPD, get providerID from DockerMachine spec
+	if machine.Spec.InfrastructureRef.Kind == "DockerMachine" {
+		dockerMachine := &unstructured.Unstructured{}
+		dockerMachine.SetGroupVersionKind(machine.Spec.InfrastructureRef.GroupVersionKind())
+		dockerMachineKey := types.NamespacedName{
+			Name:      machine.Spec.InfrastructureRef.Name,
+			Namespace: machine.Spec.InfrastructureRef.Namespace,
+		}
+		if err := r.Get(ctx, dockerMachineKey, dockerMachine); err != nil {
+			log.V(4).Info("Failed to get DockerMachine for providerID", "machine", machine.Name, "dockerMachine", dockerMachineKey.Name, "error", err)
+			return ""
+		}
+		if providerID, found, err := unstructured.NestedString(dockerMachine.Object, "spec", "providerID"); err == nil && found && providerID != "" {
+			log.V(4).Info("Found providerID in DockerMachine spec", "providerID", providerID, "machine", machine.Name, "dockerMachine", dockerMachineKey.Name)
+			return providerID
+		}
+	}
+
 	return ""
 }
